@@ -4,6 +4,8 @@ import pandas as pd
 from matplotlib import pyplot as pl
 import copy
 from random import shuffle
+import itertools
+import math
 
 # note that longrange_bar is currently normed to V1 self connectivity because
 # that is a valid reference in a Syn-EGFP experiment. However, the problem of norming everything to that
@@ -27,9 +29,41 @@ def plot_smc_heatmap(df, col_to_exclude):
         ax.set_xlabel("Termination Zone")
         ax.set_title(network_type)
     pl.show()
+
     
-def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snmc_type,
-                               *anatomical_dict):
+def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snmc_type, *brain_regions):
+
+    """ Synapses Per Neuron """
+
+    # In original, WTA inhibitory neuron hits all other WTA inhib and excitatory cells. Inhibitory WTA neurons
+    # project down to Layer V MUX for both P and Q. 
+    
+    if snmc_type == "original":
+        # WTA
+        excitatory_wta_to_wta = 1 
+        excitatory_wta_intracortical = 1 # state travels to next microcolumn.
+        inhibitory_wta_to_wta = 2 * (num_assemblies - 1) # hits all other wta excitatory neurons
+        excitatory_wta_to_scoring = 0  # one to mux.
+        inhibitory_wta_to_scoring = 2
+        # Assemblies
+        assembly_to_wta = 1
+        assembly_to_scoring = 2
+        # Scoring
+        q_accumulator_to_scoring = 1
+        q_accumulator_to_norm = 1
+        q_thresholder_to_scoring = 2
+        q_mux_to_scoring = 1
+        p_accumulator_to_scoring = 1
+        p_thresholder_to_scoring = 2
+        p_mux_to_norm = 1
+        inhibitory_mux_to_mux = 0  # one for each mux
+
+    # In updated SNMC bioreal, the WTA excitatory AND inhibitory neuron receive input from assemblies at the same time.
+    # The inhibitory neuron projects to all other WTA excitatory neurons. The WTA excitatory neuron projects down to a
+    # neuron in Layer V that inhibits the dendrites of the P and Q mux for losing values. This architecture prevents
+    # the two synapse delay in inhibiting losing values in the WTA circuit, and prevents the need for inhibition of
+    # losing WTA inhibitory neurons. Scoring should be cleaner because only one WTA should ever activate. 
+        
     if snmc_type == "update":
         # WTA
         excitatory_wta_to_wta = 0 
@@ -43,54 +77,155 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
         # Scoring
         q_accumulator_to_scoring = 1
         q_accumulator_to_norm = 1
-        p_mux_to_norm = 1
         q_thresholder_to_scoring = 2
+        q_mux_to_scoring = 1
+        p_accumulator_to_scoring = 1
         p_thresholder_to_scoring = 2
+        p_mux_to_norm = 1
         inhibitory_mux_to_mux = 2  # one for each mux
+
+    """ Build a dictionary that establishes a mapping between components """ 
         
-    # what is the probability of neurons being connected? have to factor in prob of drawing both neurons 
+    connections = {}
+    connections["Scoring", "Scoring"] = q_accumulator_to_scoring + q_accumulator_to_norm + q_thresholder_to_scoring + q_mux_to_scoring + p_accumulator_to_scoring + p_thresholder_to_scoring + p_mux_to_norm + (num_assemblies * inhibitory_mux_to_mux)
+    connections["WTA", "WTA"] = num_assemblies * (excitatory_wta_to_wta + inhibitory_wta_to_wta)
+    connections["WTA", "Scoring"] = num_assemblies * (inhibitory_wta_to_scoring + excitatory_wta_to_scoring)
+    connections["WTA", "DownstreamVariable"] = num_assemblies * excitatory_wta_intracortical
+    connections["Assemblies", "WTA"] = num_assemblies * assembly_size * assembly_to_wta
+    connections["Assemblies", "Scoring"] = num_assemblies * assembly_size * assembly_to_scoring
+    connections.update((k, v*num_particles) for k, v in connections.items())
 
-    scoring_internal = q_accumulator_to_scoring + q_accumulator_to_norm + p_mux_to_norm + q_thresholder_to_scoring + p_thresholder_to_scoring + (num_assemblies * inhibitory_mux_to_mux)
-    wta_internal = excitatory_wta_to_wta + inhibitory_wta_to_wta
-    wta_to_scoring = inhibitory_wta_to_scoring + excitatory_wta_to_scoring
+    connections["Scoring", "Normalizer"] = 2 * num_particles
+    connections["Normalizer", "Resampler"] = num_particles
+    connections["Resampler", "ObsStateSync"] = num_particles
+    connections["ObsStateSync", "WTA"] = num_particles
+
+    """ Randomly assign components to relevant brain regions """
     
-    total_microcircuit_synapses = map(lambda x: x * num_particles, [scoring_internal, wta_internal, wta_to_scoring, assembly_to_wta, assembly_to_scoring])
-    
-    scoring_to_normalizer = 2 * num_particles
-    normalizer_to_resampler = num_particles
-    resampler_to_obs_sync = num_particles
-    obs_sync_to_sampler = num_particles
-
-    synapses = ["V1", "CP", "GPi", "Thal"]
-    pairwise_synapses = [a[0] + "-" + a[1] for a in list(itertools.permutations(synapses, 2))] + ["V1-V1", "V1-S1"]
-
-    brain_regions = ["V1L2", "V1L4", "V1L5", "S1", "CP", "GPi", "Thal"]
-    shuffle(brain_regions)
-    snmc_components = ["Assemblies", "WTA", "Scoring", "Normalizer", "Resampler", "ObsStateSync", "DownstreamVariable"]
-
-    random_brain_snmc_pairings = zip(brain_regions, snmc_components)
-    
-    
-
-
-
-    
-    
-    if anatomical_dict == ():
-        anatomical_dict = { "
-
-
-        
+    if brain_regions == ():
+         brain_regions = ["V1L2", "V1L4", "V1L5", "CP", "GPi", "LD"]
+         shuffle(brain_regions)
     else:
-        anatomical_dict = anatomical_dict[0]
-
-    total_connections = total_microcircuit_synapses + scoring_to_normalizer + normalizer_to_resampler + resampler_to_obs_sync + obs_sync_to_sampler
-    
-    
+        brain_regions = brain_regions[0]
         
-    return anatomical_dict
+    snmc_components = ["Assemblies", "WTA", "Scoring", "Normalizer",
+                       "Resampler", "ObsStateSync"]
+    random_brain_snmc_pairings = dict(zip(brain_regions, snmc_components))
+    random_brain_snmc_pairings["S1"] = "DownstreamVariable"
+    pairwise_synapses = [(a[0], a[1]) for a in list(itertools.product(brain_regions + ["S1"], brain_regions + ["S1"]))]
+
+    """ Project the component mapping onto the random brain regions """ 
+    
+    def map_brain_to_snmc(source, termination):
+        try:
+            source_brain = random_brain_snmc_pairings[source]
+            termination_brain = random_brain_snmc_pairings[termination]
+            return connections[source_brain, termination_brain]
+        except KeyError:
+            return 0
+
+    synapse_dictionary = {}
+    for pw_syn in pairwise_synapses:
+        synapse_dictionary[pw_syn[0], pw_syn[1]] = map_brain_to_snmc(pw_syn[0], pw_syn[1])
+
+    """ Compress the resolution of the random mapping to the figure """
+
+    compressed_synapse_dictionary = {}
+    cp_to_v1_accumulator = 0
+    gpi_to_v1_accumulator = 0
+    thal_to_v1_accumulator = 0
+    v1l5_to_v1_accumulator = 0
+    v1l4_to_v1_accumulator = 0
+    v1l2_to_v1_accumulator = 0
+    
+    for k, v in synapse_dictionary.items():
+        if k[0] == "CP" and k[1][0:2] == "V1":
+            cp_to_v1_accumulator += v
+        elif k[0] == "GPi" and k[1][0:2] == "V1":
+            gpi_to_v1_accumulator += v
+        elif k[0] == "LD" and k[1][0:2] == "V1":
+            thal_to_v1_accumulator += v
+        elif k[0] == "V1L5" and k[1][0:2] == "V1":
+            v1l5_to_v1_accumulator += v
+        elif k[0] == "V1L4" and k[1][0:2] == "V1":
+            v1l4_to_v1_accumulator += v
+        elif k[0] == "V1L2" and k[1][0:2] == "V1":
+            v1l2_to_v1_accumulator += v
+        else:
+            compressed_synapse_dictionary[k] = v
+
+    compressed_synapse_dictionary["CP", "V1"] = cp_to_v1_accumulator
+    compressed_synapse_dictionary["GPi", "V1"] = gpi_to_v1_accumulator
+    compressed_synapse_dictionary["LD", "V1"] = thal_to_v1_accumulator
+    compressed_synapse_dictionary["V1L5", "V1"] = v1l5_to_v1_accumulator
+    compressed_synapse_dictionary["V1L4", "V1"] = v1l4_to_v1_accumulator
+    compressed_synapse_dictionary["V1L2", "V1"] = v1l2_to_v1_accumulator
+
+    return synapse_dictionary, compressed_synapse_dictionary
+
+def create_realsynapse_dictionary(connectivity_df):
+    realsyn_dict = {}
+    termini = ["V1", "CP", "GPi", "LD"]
+    sources = connectivity_df["Source"]
+    for source in sources:
+        source_row = connectivity_df.loc[connectivity_df["Source"] == source]
+        for terminus in termini:
+            realsyn_dict[source, terminus] = source_row[terminus].values[0]
+    realsyn_dict_filtered = {}
+    for k, v in realsyn_dict.items():
+        if not math.isnan(v):
+            realsyn_dict_filtered[k] = v
+    return realsyn_dict_filtered
+
+
+def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
+                           num_particles, syns_to_exclude):
+    # normalize all values (i.e. total synapses)
+    realsyn_dict = create_realsynapse_dictionary(real_df)
+    for syn in syns_to_exclude:
+        del realsyn_dict[syn]
+    reference_snmc_orig = generate_snmc_connectivity(
+        assembly_size, num_assemblies, num_particles,
+        "original", ["V1L4", "V1L2", "V1L5", "CP", "GPi", "LD"])[1]
+    reference_snmc_update = generate_snmc_connectivity(
+        assembly_size, num_assemblies, num_particles,
+        "update", ["V1L4", "V1L2", "V1L5", "CP", "GPi", "LD"])[1]
+    random_snmc = generate_snmc_connectivity(assembly_size, num_assemblies, num_particles,
+                                             "update")[1]
+
+    realkeys = realsyn_dict.keys()
+    network_labels = ["Real", "SNMC", "SNMC_Update", "Shuffled"]
+    norm_syn_dicts = []
+    all_syn_dicts = [realsyn_dict, reference_snmc_orig, reference_snmc_update, random_snmc]
+    for d in all_syn_dicts:
+        syn_dict = {k: d[k] for k in realkeys}
+        total_synapses = np.sum(list(syn_dict.values()))
+        syn_dict.update((k, v / total_synapses) for k, v in syn_dict.items())
+        norm_syn_dicts.append(syn_dict)
+
+    x = [k[0]+"-"+k[1] for k in realkeys]
+    y = [norm_syn_dicts[0][k] for k in realkeys]
+    hue = np.repeat(network_labels[0], len(realkeys)).tolist()
+    
+    for k, v in realsyn_dict.items():
+        print(k)
+        x += np.repeat(k[0]+"-"+k[1], 3).tolist()
+        y += [norm_syn_dicts[1][k], norm_syn_dicts[2][k], norm_syn_dicts[3][k]]
+        hue += network_labels[1:]
+    cpal = sns.color_palette("Set2")
+
+    fig, ax = pl.subplots(1, 1)
+    sns.barplot(x=x, y=y, hue=hue, palette=cpal, ax=ax)
+    ax.set_xlabel("Synapse")
+    ax.set_ylabel("Proportion of Circuit Connectivity")
+    ax.tick_params(axis='x', labelsize=8)
+    pl.show()
+
+        
     
     
+
+
                          
 def scatter_and_barplot_smc(df, xval, yval, hueval, syns_to_exclude, exclude_flag):
     cpal = sns.color_palette("Set2")
@@ -124,4 +259,4 @@ def scatter_and_barplot_smc(df, xval, yval, hueval, syns_to_exclude, exclude_fla
 #syns_to_exclude = ["CP-CP", "GPi-GPi", "LD-LD"]
 #scatter_and_barplot_smc(longrange_bar, "Synapse", "NormedToSum", "NetworkType", syns_to_exclude, "Synapse")
    
-    
+   
