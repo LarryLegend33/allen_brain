@@ -25,9 +25,43 @@ def make_v1_psp_reference():
     fracmap = lambda x: fractions.Fraction(x) if not x == "0/0" else np.nan
     v1_fractions = v1_hm.applymap(fracmap)
     v1_decimals = v1_fractions.applymap(np.float)
-    fig, ax = pl.subplots(1, 1)
+    fig, ax = pl.subplots(1, 2)
     sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns)
     ax.set_title("Campagnola et al. 2022")
+
+    compressed_dict = {}
+    pyr_nodes = ["L2e", "L4e", "L5e"]
+    inhib_nodes = ["L2i", "L4i", "L5i"]
+    mc_nodes = pyr_nodes + inhib_nodes
+
+    sources = v1mouse["PreSyn"]
+
+    def node_to_neuron(node):
+        node[0:2] = layer
+        node[2:5] = identity
+
+        # adding either 1, 3 or 9 things together. 
+        
+        if identity == "e":
+            
+        source = v1_fractions.loc[v1_fractions["PreSyn"] == 
+
+    
+    for (s, t) in itertools.product(mc_nodes, mc_nodes):
+        compressed_dict[s, t] = 
+    
+
+    
+    
+    
+    
+        
+
+        
+        source_row = connectivity_df.loc[connectivity_df["PreSyn"] == source]
+    
+
+    
     pl.show()
     
 
@@ -171,6 +205,7 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     # connection probability. 
     microcircuit_components = ["WTA", "Assemblies", "Scoring"]
     microcircuit_locations = ["L2", "L4", "L5"]
+    
     # see the v1 reference for possible choices. can either randomly assign inhibitory connections to neuropeptide
     # identities or aggregate all neuropeptides into one inhibitory identity. 
     
