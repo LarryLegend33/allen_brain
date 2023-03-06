@@ -6,6 +6,7 @@ import copy
 from random import shuffle
 import itertools
 import math
+import fractions
 
 # note that longrange_bar is currently normed to V1 self connectivity because
 # that is a valid reference in a Syn-EGFP experiment. However, the problem of norming everything to that
@@ -17,6 +18,19 @@ longrange_bar = pd.read_csv("longrange_df.csv")
 microcircuit = pd.read_csv("microcircuit.csv")
 microcircuit_probability = pd.read_csv("microcircuit_probabilities.csv")
 microcircuit_probability_bar = pd.read_csv("microcircuit_probs_df.csv")
+
+def make_v1_psp_reference():
+    v1mouse = pd.read_csv("v1mouse.csv")
+    v1_hm = v1mouse.loc[:, v1mouse.columns!="PreSyn"]
+    fracmap = lambda x: fractions.Fraction(x) if not x == "0/0" else np.nan
+    v1_fractions = v1_hm.applymap(fracmap)
+    v1_decimals = v1_fractions.applymap(np.float)
+    fig, ax = pl.subplots(1, 1)
+    sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns)
+    ax.set_title("Campagnola et al. 2022")
+    pl.show()
+    
+
 
 def plot_smc_heatmap(df, col_to_exclude):
     network_types = np.unique(df["NetworkType"]).tolist()
@@ -31,23 +45,37 @@ def plot_smc_heatmap(df, col_to_exclude):
     pl.show()
 
     
+    
 def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snmc_type, *brain_regions):
 
     """ Synapses Per Neuron """
 
     # In original, WTA inhibitory neuron hits all other WTA inhib and excitatory cells. Inhibitory WTA neurons
-    # project down to Layer V MUX for both P and Q. 
+    # project down to Layer V MUX for both P and Q.
+
+
+    # break these down to subcompoments but keep the broad definitions too. make broad definitions the
+    # sum of specific definitions defined in the snmc_type flagged spots. make the broad definitions
+    # underneath the if statements
+
+    # can make these input dictionaries too. 
     
     if snmc_type == "original":
         # WTA
-        excitatory_wta_to_wta = 1 
+        e_wta_to_e_wta = 0
+        e_wta_to_i_wta = 1
+        i_wta_to_e_wta = num_assemblies - 1
+        i_wta_to_i_wta = num_assemblies - 1
+        e_wta_to_e_scoring = 0
+        e_wta_to_i_scoring = 0
+        i_wta_to_e_scoring = 2
+        i_wta_to_i_scoring = 0
         excitatory_wta_intracortical = 1 # state travels to next microcolumn.
-        inhibitory_wta_to_wta = 2 * (num_assemblies - 1) # hits all other wta excitatory neurons
-        excitatory_wta_to_scoring = 0  # one to mux.
-        inhibitory_wta_to_scoring = 2
         # Assemblies
-        assembly_to_wta = 1
-        assembly_to_scoring = 2
+        assembly_to_e_wta = 1
+        assembly_to_i_wta = 0
+        assembly_to_e_scoring = 2
+        assembly_to_i_scoring = 0
         # Scoring
         q_accumulator_to_scoring = 1
         q_accumulator_to_norm = 1
@@ -57,7 +85,9 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
         p_thresholder_to_scoring = 2
         p_mux_to_norm = 1
         inhibitory_mux_to_mux = 0  # one for each mux
-
+        inhibitory_scoring_neurons = 2
+        excitatory_scoring_neurons = 4
+        
     # In updated SNMC bioreal, the WTA excitatory AND inhibitory neuron receive input from assemblies at the same time.
     # The inhibitory neuron projects to all other WTA excitatory neurons. The WTA excitatory neuron projects down to a
     # neuron in Layer V that inhibits the dendrites of the P and Q mux for losing values. This architecture prevents
@@ -66,14 +96,20 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
         
     if snmc_type == "update":
         # WTA
-        excitatory_wta_to_wta = 0 
+        e_wta_to_e_wta = 0
+        e_wta_to_i_wta = 0
+        i_wta_to_e_wta = num_assemblies - 1 # hits all other wta excitatory neurons
+        i_wta_to_i_wta = 0
+        e_wta_to_e_scoring = 0
+        e_wta_to_i_scoring = 1
+        i_wta_to_e_scoring = 0
+        i_wta_to_i_scoring = 0
         excitatory_wta_intracortical = 1 # state travels to next microcolumn.
-        inhibitory_wta_to_wta = num_assemblies - 1 # hits all other wta excitatory neurons
-        excitatory_wta_to_scoring = 1  # one to mux.
-        inhibitory_wta_to_scoring = 0
         # Assemblies
-        assembly_to_wta = 2
-        assembly_to_scoring = 2
+        assembly_to_e_wta = 1
+        assembly_to_i_wta = 1
+        assembly_to_e_scoring = 2
+        assembly_to_i_scoring = 0
         # Scoring
         q_accumulator_to_scoring = 1
         q_accumulator_to_norm = 1
@@ -83,7 +119,61 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
         p_thresholder_to_scoring = 2
         p_mux_to_norm = 1
         inhibitory_mux_to_mux = 2  # one for each mux
+        inhibitory_scoring_neurons = num_assemblies + 2
+        excitatory_scoring_neurons = 4
+        
+    excitatory_wta_to_wta = e_wta_to_e_wta + e_wta_to_i_wta
+    inhibitory_wta_to_wta = i_wta_to_e_wta + i_wta_to_i_wta
+    excitatory_wta_to_scoring = e_wta_to_e_scoring + e_wta_to_i_scoring
+    inhibitory_wta_to_scoring = i_wta_to_e_scoring + i_wta_to_i_scoring
+    assembly_to_wta = assembly_to_e_wta + assembly_to_i_wta
+    assembly_to_scoring = assembly_to_e_scoring + assembly_to_i_scoring
 
+    psp_probs = {}
+    psp_probs["WTA_e", "WTA_e"] = e_wta_to_e_wta / (num_assemblies-1)
+    psp_probs["WTA_e", "WTA_i"] = e_wta_to_i_wta / num_assemblies
+    psp_probs["WTA_i", "WTA_e"] = i_wta_to_e_wta / num_assemblies
+    psp_probs["WTA_i", "WTA_i"] = i_wta_to_i_wta / (num_assemblies-1)
+    psp_probs["WTA_e", "Assemblies_e"] = 0 # update these later with a wta_to_assembly varb that is modable 
+    psp_probs["WTA_i", "Assemblies_e"] = 0
+    psp_probs["WTA_e", "Assemblies_i"] = 0
+    psp_probs["WTA_i", "Assemblies_i"] = 0 
+    psp_probs["WTA_e", "Scoring_i"] = e_wta_to_i_scoring / inhibitory_scoring_neurons
+    psp_probs["WTA_i", "Scoring_i"] = i_wta_to_i_scoring / inhibitory_scoring_neurons
+    psp_probs["WTA_e", "Scoring_e"] = e_wta_to_e_scoring / excitatory_scoring_neurons
+    psp_probs["WTA_i", "Scoring_e"] = i_wta_to_e_scoring / excitatory_scoring_neurons
+    psp_probs["Assemblies_e", "WTA_e"] = assembly_to_e_wta / num_assemblies
+    psp_probs["Assemblies_i", "WTA_e"] = 0
+    psp_probs["Assemblies_e", "WTA_i"] = assembly_to_i_wta / num_assemblies
+    psp_probs["Assemblies_i", "WTA_i"] = 0
+    psp_probs["Assemblies_e", "Assemblies_e"] = 0
+    psp_probs["Assemblies_e", "Assemblies_i"] = 0
+    psp_probs["Assemblies_i", "Assemblies_e"] = 0
+    psp_probs["Assemblies_i", "Assemblies_i"] = 0
+    psp_probs["Assemblies_e", "Scoring_e"] = assembly_to_e_scoring / excitatory_scoring_neurons
+    psp_probs["Assemblies_i", "Scoring_e"] = 0
+    psp_probs["Assemblies_e", "Scoring_i"] = assembly_to_i_scoring / inhibitory_scoring_neurons
+    psp_probs["Assemblies_i", "Scoring_i"] = 0
+    psp_probs["Scoring_e", "WTA_e"] = 0
+    psp_probs["Scoring_e", "WTA_i"] = 0
+    psp_probs["Scoring_i", "WTA_i"] = 0
+    psp_probs["Scoring_i", "WTA_e"] = 0
+    psp_probs["Scoring_e", "Assemblies_e"] = 0
+    psp_probs["Scoring_i", "Assemblies_e"] = 0
+    psp_probs["Scoring_e", "Assemblies_i"] = 0
+    psp_probs["Scoring_i", "Assemblies_i"] = 0
+    psp_probs["Scoring_e", "Scoring_i"] = (.25 * q_mux_to_scoring / inhibitory_scoring_neurons) + (
+        .25 * p_accumulator_to_scoring / inhibitory_scoring_neurons) # two other excitatory types pmux to norm and q_accum to norm, which don't connect to anything locally.
+    psp_probs["Scoring_i", "Scoring_i"] = 0
+    psp_probs["Scoring_e", "Scoring_e"] = 0
+    psp_probs["Scoring_i", "Scoring_e"] = (1 / inhibitory_scoring_neurons) * q_thresholder_to_scoring / excitatory_scoring_neurons + (1 / inhibitory_scoring_neurons) * p_thresholder_to_scoring / excitatory_scoring_neurons + num_assemblies / inhibitory_scoring_neurons * (inhibitory_mux_to_mux / excitatory_scoring_neurons) 
+    # probabilities here are more complex because there are multiple excitatory neurons that each have a different
+    # connection probability. 
+    microcircuit_components = ["WTA", "Assemblies", "Scoring"]
+    microcircuit_locations = ["L2", "L4", "L5"]
+    # see the v1 reference for possible choices. can either randomly assign inhibitory connections to neuropeptide
+    # identities or aggregate all neuropeptides into one inhibitory identity. 
+    
     """ Build a dictionary that establishes a mapping between components """ 
         
     connections = {}
@@ -161,7 +251,11 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     compressed_synapse_dictionary["V1L4", "V1"] = v1l4_to_v1_accumulator
     compressed_synapse_dictionary["V1L2", "V1"] = v1l2_to_v1_accumulator
 
-    return synapse_dictionary, compressed_synapse_dictionary
+    return synapse_dictionary, compressed_synapse_dictionary, random_brain_snmc_pairings
+
+    
+    
+    
 
 def create_realsynapse_dictionary(connectivity_df):
     realsyn_dict = {}
@@ -184,15 +278,16 @@ def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
     realsyn_dict = create_realsynapse_dictionary(real_df)
     for syn in syns_to_exclude:
         del realsyn_dict[syn]
+
+    # these two references assign the brain regions according to the topology in the paper
     reference_snmc_orig = generate_snmc_connectivity(
         assembly_size, num_assemblies, num_particles,
         "original", ["V1L4", "V1L2", "V1L5", "CP", "GPi", "LD"])[1]
     reference_snmc_update = generate_snmc_connectivity(
         assembly_size, num_assemblies, num_particles,
         "update", ["V1L4", "V1L2", "V1L5", "CP", "GPi", "LD"])[1]
-    random_snmc = generate_snmc_connectivity(assembly_size, num_assemblies, num_particles,
-                                             "update")[1]
-
+    _, random_snmc, random_snmc_pairings = generate_snmc_connectivity(
+        assembly_size, num_assemblies, num_particles, "update")
     realkeys = realsyn_dict.keys()
     network_labels = ["Real", "SNMC", "SNMC_Update", "Shuffled"]
     norm_syn_dicts = []
@@ -214,17 +309,33 @@ def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
         hue += network_labels[1:]
     cpal = sns.color_palette("Set2")
 
-    fig, ax = pl.subplots(1, 1)
+    fig, ax = pl.subplots(1, 1, figsize=(12, 7))
     sns.barplot(x=x, y=y, hue=hue, palette=cpal, ax=ax)
     ax.set_xlabel("Synapse")
     ax.set_ylabel("Proportion of Circuit Connectivity")
-    ax.tick_params(axis='x', labelsize=8)
+    ax.tick_params(axis='x', labelsize=8, rotation=90)
     pl.show()
 
-        
+    rand_sims = [generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, "update")
+                 for i in range(100)]
     
+    # want one panel of 
+    return random_snmc_pairings
+
+
+
+# real process by which these maps are generated is start with a presyn cell. draw a random
+# neuron of the postsyn type. ask probability of connection. so you FIND a presyn neuron and FIND a postsyn neuron
+# not randomly draw. if we want to compare to the V1 reference, we have to either self-assign neuropeptide identity, or
+# randomly assign the type of the cell and ask what comes out. we are bound to assemblies and WTA being excitatory.
+# outputs of L5 should also be excitatory.
+
+
+
     
 
+    
+   
 
                          
 def scatter_and_barplot_smc(df, xval, yval, hueval, syns_to_exclude, exclude_flag):
@@ -256,7 +367,17 @@ def scatter_and_barplot_smc(df, xval, yval, hueval, syns_to_exclude, exclude_fla
 
 # want real normedconnection on x axis, snmc normedconnection on y axis PER connection. 
 
-#syns_to_exclude = ["CP-CP", "GPi-GPi", "LD-LD"]
+syns_to_exclude = [("V1L5", "V1"), ("V1L2", "V1"), ("V1L4", "V1")]
+random_snmc_pairings = smc_barplot_from_dicts(longrange, 3, 3, 1, syns_to_exclude)
+
+interesting_random = {'V1L2': 'Assemblies',
+                      'GPi': 'WTA',
+                      'CP': 'Scoring',
+                      'V1L5': 'Normalizer',
+                      'V1L4': 'Resampler',
+                      'LD': 'ObsStateSync',
+                      'S1': 'DownstreamVariable'}
+
 #scatter_and_barplot_smc(longrange_bar, "Synapse", "NormedToSum", "NetworkType", syns_to_exclude, "Synapse")
    
    
