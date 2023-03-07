@@ -33,7 +33,6 @@ def make_v1_psp_reference(*snmc_dfs):
         fig, ax = pl.subplots(1, 2)
         sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns, ax=ax[0])
         ax[0].set_title("Campagnola et al. 2022")
-
     compressed_dict = {}
     pyr_nodes = ["L2e", "L4e", "L5e"]
     inhib_nodes = ["L2i", "L4i", "L5i"]
@@ -59,7 +58,6 @@ def make_v1_psp_reference(*snmc_dfs):
         source_filtered = v1_fractions.loc[v1_fractions["PreSyn"].isin(source_rows)]
         term_filtered = source_filtered.loc[:, source_filtered.columns.isin(term_columns)]
 
-
         # this works but actually adds the fractions instead of adding the num and denom
 
         all_connections = functools.reduce(
@@ -81,7 +79,6 @@ def make_v1_psp_reference(*snmc_dfs):
     compressed_df.loc[compressed_df["PreSyn"] == "L4e", "L5e"] = .116
     compressed_df.loc[compressed_df["PreSyn"] == "L5e", "L4e"] = 0.0
 
-
     if snmc_dfs != ():
         sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns, ax=ax[0, 0])
         sns.heatmap(compressed_df.loc[:, compressed_df.columns!="PreSyn"].applymap(np.float),
@@ -89,10 +86,9 @@ def make_v1_psp_reference(*snmc_dfs):
         snmc_df = snmc_dfs[0]
         rand_df = snmc_dfs[1]
         ticklabs = snmc_df["PreSyn"]
-        
-        ax[0,1].set_title("Real Data")
-        ax[1,0].set_title("WTA L2, Assemblies L4, Scoring L5")
-        ax[1,1].set_title("Random SNMC Assignment")
+        ax[0, 1].set_title("Real Data")
+        ax[1, 0].set_title("WTA L2, Assemblies L4, Scoring L5")
+        ax[1, 1].set_title("Random SNMC Assignment")
         sns.heatmap(snmc_df.loc[:, snmc_df.columns!="PreSyn"].applymap(float),
                     yticklabels=ticklabs, ax=ax[1, 0])
         sns.heatmap(rand_df.loc[:, rand_df.columns!="PreSyn"].applymap(float),
@@ -100,25 +96,12 @@ def make_v1_psp_reference(*snmc_dfs):
 
     else:
         sns.heatmap(compressed_df.loc[:, compressed_df.columns!="PreSyn"].applymap(np.float),
-                yticklabels=compressed_df.columns[compressed_df.columns!="PreSyn"], ax=ax[1])
+                    yticklabels=compressed_df.columns[compressed_df.columns!="PreSyn"], ax=ax[1])
     pl.tight_layout()
     pl.show()
     return compressed_dict, compressed_df
-    
 
-def plot_smc_heatmap(df, col_to_exclude):
-    network_types = np.unique(df["NetworkType"]).tolist()
-    fig, axes = pl.subplots(1, len(network_types))
-    for (network_type, ax) in zip(network_types, axes):
-        df_network = df[df["NetworkType"] == network_type]
-        df_filt = df_network.loc[:, ~df_network.columns.isin([col_to_exclude, "NetworkType"])]
-        sns.heatmap(df_filt, yticklabels=df_network[col_to_exclude], ax=ax, cmap="viridis")
-        ax.set_ylabel("Source")
-        ax.set_xlabel("Termination Zone")
-        ax.set_title(network_type)
-    pl.show()
 
-    
 def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snmc_type, randomize_brain_regions):
 
     """ Synapses Per Neuron """
@@ -244,10 +227,7 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
         psp_df.loc[psp_df["PreSyn"] == syn[0], syn[1]] = psp_probs[random_microcircuit_pairings[syn[0]],
                                                                    random_microcircuit_pairings[syn[1]]]
         
-    # see the v1 reference for possible choices. can either randomly assign inhibitory connections to neuropeptide
-    # identities or aggregate all neuropeptides into one inhibitory identity. 
-    
-    """ Build a dictionary that establishes a mapping between components """ 
+    """ Build a dictionary that establishes a mapping between components """
         
     connections = {}
     connections["Scoring", "Scoring"] = q_accumulator_to_scoring + q_accumulator_to_norm + q_thresholder_to_scoring + q_mux_to_scoring + p_accumulator_to_scoring + p_thresholder_to_scoring + p_mux_to_norm + (num_assemblies * inhibitory_mux_to_mux)
@@ -321,7 +301,6 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     compressed_synapse_dictionary["V1L5", "V1"] = v1l5_to_v1_accumulator
     compressed_synapse_dictionary["V1L4", "V1"] = v1l4_to_v1_accumulator
     compressed_synapse_dictionary["V1L2", "V1"] = v1l2_to_v1_accumulator
-
     return synapse_dictionary, compressed_synapse_dictionary, random_brain_snmc_pairings, psp_df
 
 
@@ -341,13 +320,12 @@ def create_realsynapse_dictionary(connectivity_df):
             realsyn_dict_filtered[k] = v
     return realsyn_dict_filtered
 
-def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
-                           num_particles, syns_to_exclude):
+def make_snmc_and_reference_dicts(real_df, assembly_size, num_assemblies,
+                                  num_particles, syns_to_exclude):
     # normalize all values (i.e. total synapses)
     realsyn_dict = create_realsynapse_dictionary(real_df)
     for syn in syns_to_exclude:
         del realsyn_dict[syn]
-
     # these two references assign the brain regions according to the topology in the paper
     reference_snmc_orig = generate_snmc_connectivity(
         assembly_size, num_assemblies, num_particles,
@@ -358,7 +336,6 @@ def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
     _, random_snmc, random_snmc_pairings, psps = generate_snmc_connectivity(
         assembly_size, num_assemblies, num_particles, "update", True)
     realkeys = realsyn_dict.keys()
-    network_labels = ["Real", "SNMC", "SNMC_Update", "Shuffled"]
     norm_syn_dicts = []
     all_syn_dicts = [realsyn_dict, reference_snmc_orig, reference_snmc_update, random_snmc]
     for d in all_syn_dicts:
@@ -366,18 +343,21 @@ def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
         total_synapses = np.sum(list(syn_dict.values()))
         syn_dict.update((k, v / total_synapses) for k, v in syn_dict.items())
         norm_syn_dicts.append(syn_dict)
+    return norm_syn_dicts
 
+        
+def barplot_snmc_vs_real(norm_syn_dicts):
+    network_labels = ["Real", "SNMC", "SNMC_Update", "Shuffled"]
+    realkeys = norm_syn_dicts[0].keys()
     x = [k[0]+"-"+k[1] for k in realkeys]
     y = [norm_syn_dicts[0][k] for k in realkeys]
     hue = np.repeat(network_labels[0], len(realkeys)).tolist()
-    
-    for k, v in realsyn_dict.items():
+    for k, v in norm_syn_dicts[0].items():
         print(k)
         x += np.repeat(k[0]+"-"+k[1], 3).tolist()
         y += [norm_syn_dicts[1][k], norm_syn_dicts[2][k], norm_syn_dicts[3][k]]
         hue += network_labels[1:]
     cpal = sns.color_palette("Set2")
-
     fig, ax = pl.subplots(1, 1, figsize=(12, 7))
     sns.barplot(x=x, y=y, hue=hue, palette=cpal, ax=ax)
     ax.set_xlabel("Synapse")
@@ -385,16 +365,61 @@ def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
     ax.tick_params(axis='x', labelsize=8, rotation=90)
     pl.show()
 
-    rand_sims = [generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, "update", True)
-                 for i in range(100)]
 
-    
-    
-    return random_snmc_pairings
+def average_n_snmc_simulations(n, syns_to_exclude):
+    rand_snmc_dicts = [make_snmc_and_reference_dicts(longrange, 3, 3, 1, syns_to_exclude)[-1]
+                       for i in range(n)]
+    avg_rand = {}
+    for k, v in rand_snmc_dicts[0].items():
+        avg_rand[k] = np.median(list(map(lambda x: x[k], rand_snmc_dicts)))
+    return avg_rand
 
+
+def final_barplot_and_scatter(syns_to_exclude):
+    normalized_connectivity = make_snmc_and_reference_dicts(longrange, 3, 3, 1, syns_to_exclude)
+    avg_random_dict = average_n_snmc_simulations(100, syns_to_exclude)
+    barplot_snmc_vs_real(normalized_connectivity[0:3] + [avg_random_dict])
+    make_scatter_from_syndicts(normalized_connectivity[0], avg_random_dict)
+    make_scatter_from_syndicts(normalized_connectivity[0], normalized_connectivity[1])
+
+
+def make_scatter_from_syndicts(d1, d2):
+    cpal = sns.color_palette("Set2")
+    xs = []
+    ys = []
+    yoffset = 0
+    y_off = 0
+    fig, ax = pl.subplots(1, 1, figsize=(9, 4))
+    for k, v in d1.items():
+        x = v
+        y = d2[k]
+        if x == 0 and y == 0:
+            y_off = copy.deepcopy(yoffset)
+            yoffset += .08
+        else:
+            y_off = 0
+        ax.annotate(k[0]+'-'+k[1], (x, y+y_off))
+        xs.append(x)
+        ys.append(y)
+    sns.scatterplot(x=xs, y=ys, ax=ax, color=cpal[3])
+    pl.tight_layout()
+    pl.show()
+    
+#     y_offset = 0
+#     for xloc, yloc, syn in zip(x, y, synapses):
+#         if xloc == 0 and yloc == 0:
+#             y_off = copy.deepcopy(y_offset)
+#             y_offset += .05
+#             print(syn)
+#         else:
+#             y_off = 0
+#         ax[1].annotate(syn, (xloc + .005, yloc + y_off))
+#         ax[1].set_xlim([-.05, np.max(x) + .1])
+#         ax[1].set_ylim([-.05, np.max(y) + .1])
+#     pl.show()
 
 syns_to_exclude = [("V1L5", "V1"), ("V1L2", "V1"), ("V1L4", "V1")]
-random_snmc_pairings = smc_barplot_from_dicts(longrange, 3, 3, 1, syns_to_exclude)
+#snmc_dicts = make_snmc_and_reference_dicts(longrange, 3, 3, 1, syns_to_exclude)
 
 interesting_random = {'V1L2': 'Assemblies',
                       'GPi': 'WTA',
@@ -405,9 +430,10 @@ interesting_random = {'V1L2': 'Assemblies',
                       'S1': 'DownstreamVariable'}
    
 snmc_type = "original"
-_,_,_, psps_snmc = generate_snmc_connectivity(3, 3, 1, snmc_type, False)
-_,_,_, psps_random = generate_snmc_connectivity(3, 3, 1, snmc_type, True)
-r = make_v1_psp_reference(psps_snmc, psps_random)
+#_,_,_, psps_snmc = generate_snmc_connectivity(3, 3, 1, snmc_type, False)
+#_,_,_, psps_random = generate_snmc_connectivity(3, 3, 1, snmc_type, True)
+#r = make_v1_psp_reference(psps_snmc, psps_random)
+
 
 
 
@@ -415,6 +441,18 @@ r = make_v1_psp_reference(psps_snmc, psps_random)
 
 
 # """ Older functions for plotting dfs from csvs """ 
+
+# def plot_smc_heatmap(df, col_to_exclude):
+#     network_types = np.unique(df["NetworkType"]).tolist()
+#     fig, axes = pl.subplots(1, len(network_types))
+#     for (network_type, ax) in zip(network_types, axes):
+#         df_network = df[df["NetworkType"] == network_type]
+#         df_filt = df_network.loc[:, ~df_network.columns.isin([col_to_exclude, "NetworkType"])]
+#         sns.heatmap(df_filt, yticklabels=df_network[col_to_exclude], ax=ax, cmap="viridis")
+#         ax.set_ylabel("Source")
+#         ax.set_xlabel("Termination Zone")
+#         ax.set_title(network_type)
+#     pl.show()
 
 
 
