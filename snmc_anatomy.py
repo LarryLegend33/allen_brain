@@ -1,6 +1,7 @@
 import numpy as np
 import seaborn as sns
 import pandas as pd
+import functools
 from matplotlib import pyplot as pl
 import copy
 from random import shuffle
@@ -19,52 +20,91 @@ microcircuit = pd.read_csv("microcircuit.csv")
 microcircuit_probability = pd.read_csv("microcircuit_probabilities.csv")
 microcircuit_probability_bar = pd.read_csv("microcircuit_probs_df.csv")
 
-def make_v1_psp_reference():
+def make_v1_psp_reference(*snmc_dfs):
     v1mouse = pd.read_csv("v1mouse.csv")
     v1_hm = v1mouse.loc[:, v1mouse.columns!="PreSyn"]
     fracmap = lambda x: fractions.Fraction(x) if not x == "0/0" else np.nan
     v1_fractions = v1_hm.applymap(fracmap)
     v1_decimals = v1_fractions.applymap(np.float)
-    fig, ax = pl.subplots(1, 2)
-    sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns)
-    ax.set_title("Campagnola et al. 2022")
+    v1_fractions["PreSyn"] = v1mouse["PreSyn"]
+    if snmc_dfs != ():
+        fig, ax = pl.subplots(2, 2)
+    else:
+        fig, ax = pl.subplots(1, 2)
+        sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns, ax=ax[0])
+        ax[0].set_title("Campagnola et al. 2022")
 
     compressed_dict = {}
     pyr_nodes = ["L2e", "L4e", "L5e"]
     inhib_nodes = ["L2i", "L4i", "L5i"]
+    inh_suffixes = ["Pv", "Sst", "Vip"]
+    ex_suffixes = ["", "ET", "IT"]
     mc_nodes = pyr_nodes + inhib_nodes
+    compressed_df = pd.DataFrame(columns=mc_nodes)
+    compressed_df["PreSyn"] = mc_nodes
 
-    sources = v1mouse["PreSyn"]
+    def node_to_neuron(source_node, term_node):
+        source_layer = source_node[0:2]
+        source_identity = source_node[2:5]
+        term_layer = term_node[0:2]
+        term_identity = term_node[2:5]
+        if source_identity == "e":
+            source_rows = [source_layer+"Pyr"+es for es in ex_suffixes]
+        elif source_identity == "i":
+            source_rows = [source_layer+inh for inh in inh_suffixes]
+        if term_identity == "e":
+            term_columns = [term_layer+"Pyr"+es for es in ex_suffixes]
+        elif term_identity == "i":
+            term_columns = [term_layer+inh for inh in inh_suffixes]
+        source_filtered = v1_fractions.loc[v1_fractions["PreSyn"].isin(source_rows)]
+        term_filtered = source_filtered.loc[:, source_filtered.columns.isin(term_columns)]
 
-    def node_to_neuron(node):
-        node[0:2] = layer
-        node[2:5] = identity
 
-        # adding either 1, 3 or 9 things together. 
-        
-        if identity == "e":
-            
-        source = v1_fractions.loc[v1_fractions["PreSyn"] == 
+        # this works but actually adds the fractions instead of adding the num and denom
 
+        all_connections = functools.reduce(
+            lambda a,b: a + b, [term_filtered[c].tolist() for c in term_filtered.columns])
+        all_connections = list(filter(lambda a: type(a) == fractions.Fraction, all_connections))
+        if len(all_connections) != 0:
+            frac_connection = functools.reduce(
+                lambda a,b: fractions.Fraction(
+                    a.numerator + b.numerator, a.denominator + b.denominator), all_connections)
+        else:
+            frac_connection = np.nan
+        return frac_connection
     
     for (s, t) in itertools.product(mc_nodes, mc_nodes):
-        compressed_dict[s, t] = 
-    
+        compressed_dict[s, t] = node_to_neuron(s, t)
+        compressed_df.loc[compressed_df["PreSyn"] == s, t] = node_to_neuron(s, t)
 
-    
-    
-    
-    
+    # From Lefort et al. b/c Campagnola didn't record these synapses
+    compressed_df.loc[compressed_df["PreSyn"] == "L4e", "L5e"] = .116
+    compressed_df.loc[compressed_df["PreSyn"] == "L5e", "L4e"] = 0.0
+
+
+    if snmc_dfs != ():
+        sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns, ax=ax[0, 0])
+        sns.heatmap(compressed_df.loc[:, compressed_df.columns!="PreSyn"].applymap(np.float),
+                    yticklabels=compressed_df.columns[compressed_df.columns!="PreSyn"], ax=ax[0, 1])
+        snmc_df = snmc_dfs[0]
+        rand_df = snmc_dfs[1]
+        ticklabs = snmc_df["PreSyn"]
         
+        ax[0,1].set_title("Real Data")
+        ax[1,0].set_title("WTA L2, Assemblies L4, Scoring L5")
+        ax[1,1].set_title("Random SNMC Assignment")
+        sns.heatmap(snmc_df.loc[:, snmc_df.columns!="PreSyn"].applymap(float),
+                    yticklabels=ticklabs, ax=ax[1, 0])
+        sns.heatmap(rand_df.loc[:, rand_df.columns!="PreSyn"].applymap(float),
+                    yticklabels=ticklabs, ax=ax[1, 1])
 
-        
-        source_row = connectivity_df.loc[connectivity_df["PreSyn"] == source]
-    
-
-    
+    else:
+        sns.heatmap(compressed_df.loc[:, compressed_df.columns!="PreSyn"].applymap(np.float),
+                yticklabels=compressed_df.columns[compressed_df.columns!="PreSyn"], ax=ax[1])
+    pl.tight_layout()
     pl.show()
+    return compressed_dict, compressed_df
     
-
 
 def plot_smc_heatmap(df, col_to_exclude):
     network_types = np.unique(df["NetworkType"]).tolist()
@@ -79,20 +119,9 @@ def plot_smc_heatmap(df, col_to_exclude):
     pl.show()
 
     
-    
-def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snmc_type, *brain_regions):
+def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snmc_type, randomize_brain_regions):
 
     """ Synapses Per Neuron """
-
-    # In original, WTA inhibitory neuron hits all other WTA inhib and excitatory cells. Inhibitory WTA neurons
-    # project down to Layer V MUX for both P and Q.
-
-
-    # break these down to subcompoments but keep the broad definitions too. make broad definitions the
-    # sum of specific definitions defined in the snmc_type flagged spots. make the broad definitions
-    # underneath the if statements
-
-    # can make these input dictionaries too. 
     
     if snmc_type == "original":
         # WTA
@@ -121,12 +150,6 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
         inhibitory_mux_to_mux = 0  # one for each mux
         inhibitory_scoring_neurons = 2
         excitatory_scoring_neurons = 4
-        
-    # In updated SNMC bioreal, the WTA excitatory AND inhibitory neuron receive input from assemblies at the same time.
-    # The inhibitory neuron projects to all other WTA excitatory neurons. The WTA excitatory neuron projects down to a
-    # neuron in Layer V that inhibits the dendrites of the P and Q mux for losing values. This architecture prevents
-    # the two synapse delay in inhibiting losing values in the WTA circuit, and prevents the need for inhibition of
-    # losing WTA inhibitory neurons. Scoring should be cleaner because only one WTA should ever activate. 
         
     if snmc_type == "update":
         # WTA
@@ -202,10 +225,25 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     psp_probs["Scoring_e", "Scoring_e"] = 0
     psp_probs["Scoring_i", "Scoring_e"] = (1 / inhibitory_scoring_neurons) * q_thresholder_to_scoring / excitatory_scoring_neurons + (1 / inhibitory_scoring_neurons) * p_thresholder_to_scoring / excitatory_scoring_neurons + num_assemblies / inhibitory_scoring_neurons * (inhibitory_mux_to_mux / excitatory_scoring_neurons) 
     # probabilities here are more complex because there are multiple excitatory neurons that each have a different
-    # connection probability. 
+    # connection probability.
+    microcircuit_layers = ["L2", "L4", "L5"]
     microcircuit_components = ["WTA", "Assemblies", "Scoring"]
-    microcircuit_locations = ["L2", "L4", "L5"]
+    if randomize_brain_regions:
+        shuffle(microcircuit_components)
+    psp_df = pd.DataFrame(columns=list(map(
+        lambda l: l + "e", microcircuit_layers)) + list(
+            map(lambda l: l + "i", microcircuit_layers)))
+    layers_ei = psp_df.columns
+    psp_df["PreSyn"] = layers_ei
+    random_microcircuit_pairings = {a: b for a, b in zip(
+        psp_df.columns, list(map(
+            lambda l: l + "_e", microcircuit_components)) + list(
+                map(lambda l: l + "_i", microcircuit_components)))}
     
+    for syn in itertools.product(layers_ei, layers_ei):
+        psp_df.loc[psp_df["PreSyn"] == syn[0], syn[1]] = psp_probs[random_microcircuit_pairings[syn[0]],
+                                                                   random_microcircuit_pairings[syn[1]]]
+        
     # see the v1 reference for possible choices. can either randomly assign inhibitory connections to neuropeptide
     # identities or aggregate all neuropeptides into one inhibitory identity. 
     
@@ -219,7 +257,7 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     connections["Assemblies", "WTA"] = num_assemblies * assembly_size * assembly_to_wta
     connections["Assemblies", "Scoring"] = num_assemblies * assembly_size * assembly_to_scoring
     connections.update((k, v*num_particles) for k, v in connections.items())
-
+    
     connections["Scoring", "Normalizer"] = 2 * num_particles
     connections["Normalizer", "Resampler"] = num_particles
     connections["Resampler", "ObsStateSync"] = num_particles
@@ -227,13 +265,11 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
 
     """ Randomly assign components to relevant brain regions """
     
-    if brain_regions == ():
-         brain_regions = ["V1L2", "V1L4", "V1L5", "CP", "GPi", "LD"]
-         shuffle(brain_regions)
-    else:
-        brain_regions = brain_regions[0]
+    brain_regions = ["V1L2", "V1L4", "V1L5", "CP", "GPi", "LD"]
+    if randomize_brain_regions:
+        shuffle(brain_regions)
         
-    snmc_components = ["Assemblies", "WTA", "Scoring", "Normalizer",
+    snmc_components = ["WTA", "Assemblies", "Scoring", "Normalizer",
                        "Resampler", "ObsStateSync"]
     random_brain_snmc_pairings = dict(zip(brain_regions, snmc_components))
     random_brain_snmc_pairings["S1"] = "DownstreamVariable"
@@ -286,11 +322,10 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     compressed_synapse_dictionary["V1L4", "V1"] = v1l4_to_v1_accumulator
     compressed_synapse_dictionary["V1L2", "V1"] = v1l2_to_v1_accumulator
 
-    return synapse_dictionary, compressed_synapse_dictionary, random_brain_snmc_pairings
+    return synapse_dictionary, compressed_synapse_dictionary, random_brain_snmc_pairings, psp_df
 
-    
-    
-    
+
+""" Macro Scale Connectivity """ 
 
 def create_realsynapse_dictionary(connectivity_df):
     realsyn_dict = {}
@@ -306,7 +341,6 @@ def create_realsynapse_dictionary(connectivity_df):
             realsyn_dict_filtered[k] = v
     return realsyn_dict_filtered
 
-
 def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
                            num_particles, syns_to_exclude):
     # normalize all values (i.e. total synapses)
@@ -317,12 +351,12 @@ def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
     # these two references assign the brain regions according to the topology in the paper
     reference_snmc_orig = generate_snmc_connectivity(
         assembly_size, num_assemblies, num_particles,
-        "original", ["V1L4", "V1L2", "V1L5", "CP", "GPi", "LD"])[1]
+        "original", False)[1]
     reference_snmc_update = generate_snmc_connectivity(
         assembly_size, num_assemblies, num_particles,
-        "update", ["V1L4", "V1L2", "V1L5", "CP", "GPi", "LD"])[1]
-    _, random_snmc, random_snmc_pairings = generate_snmc_connectivity(
-        assembly_size, num_assemblies, num_particles, "update")
+        "update", False)[1]
+    _, random_snmc, random_snmc_pairings, psps = generate_snmc_connectivity(
+        assembly_size, num_assemblies, num_particles, "update", True)
     realkeys = realsyn_dict.keys()
     network_labels = ["Real", "SNMC", "SNMC_Update", "Shuffled"]
     norm_syn_dicts = []
@@ -351,56 +385,13 @@ def smc_barplot_from_dicts(real_df, assembly_size, num_assemblies,
     ax.tick_params(axis='x', labelsize=8, rotation=90)
     pl.show()
 
-    rand_sims = [generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, "update")
+    rand_sims = [generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, "update", True)
                  for i in range(100)]
+
     
-    # want one panel of 
+    
     return random_snmc_pairings
 
-
-
-# real process by which these maps are generated is start with a presyn cell. draw a random
-# neuron of the postsyn type. ask probability of connection. so you FIND a presyn neuron and FIND a postsyn neuron
-# not randomly draw. if we want to compare to the V1 reference, we have to either self-assign neuropeptide identity, or
-# randomly assign the type of the cell and ask what comes out. we are bound to assemblies and WTA being excitatory.
-# outputs of L5 should also be excitatory.
-
-
-
-    
-
-    
-   
-
-                         
-def scatter_and_barplot_smc(df, xval, yval, hueval, syns_to_exclude, exclude_flag):
-    cpal = sns.color_palette("Set2")
-    df_filt = df[~df[exclude_flag].isin(syns_to_exclude)]
-    fig, ax = pl.subplots(2, 1)
-    sns.barplot(data=df_filt, x=xval, y=yval, hue=hueval, palette=cpal, ax=ax[0])
-    synapses = df_filt["Synapse"].unique()
-    scatter_realvals = df_filt[df_filt["NetworkType"] == "Real"]
-    scatter_smc = df_filt[df_filt["NetworkType"] == "SNMC_Update"]
-    x = [scatter_realvals[scatter_realvals["Synapse"] == syn]["NormedToSum"].values[0] for syn in synapses]
-    y = [scatter_smc[scatter_smc["Synapse"] == syn]["NormedToSum"].values[0] for syn in synapses]
-    sns.scatterplot(x=x, y=y, ax=ax[1], color=cpal[3])
-    ax[1].set_xlabel("Real Connection Strength")
-    ax[1].set_ylabel("SNMC Connection Strength")
-    y_offset = 0
-    for xloc, yloc, syn in zip(x, y, synapses):
-        if xloc == 0 and yloc == 0:
-            y_off = copy.deepcopy(y_offset)
-            y_offset += .05
-            print(syn)
-        else:
-            y_off = 0
-        ax[1].annotate(syn, (xloc + .005, yloc + y_off))
-        ax[1].set_xlim([-.05, np.max(x) + .1])
-        ax[1].set_ylim([-.05, np.max(y) + .1])
-    pl.show()
-
-
-# want real normedconnection on x axis, snmc normedconnection on y axis PER connection. 
 
 syns_to_exclude = [("V1L5", "V1"), ("V1L2", "V1"), ("V1L4", "V1")]
 random_snmc_pairings = smc_barplot_from_dicts(longrange, 3, 3, 1, syns_to_exclude)
@@ -412,7 +403,43 @@ interesting_random = {'V1L2': 'Assemblies',
                       'V1L4': 'Resampler',
                       'LD': 'ObsStateSync',
                       'S1': 'DownstreamVariable'}
+   
+snmc_type = "original"
+_,_,_, psps_snmc = generate_snmc_connectivity(3, 3, 1, snmc_type, False)
+_,_,_, psps_random = generate_snmc_connectivity(3, 3, 1, snmc_type, True)
+r = make_v1_psp_reference(psps_snmc, psps_random)
 
-#scatter_and_barplot_smc(longrange_bar, "Synapse", "NormedToSum", "NetworkType", syns_to_exclude, "Synapse")
-   
-   
+
+
+
+
+
+# """ Older functions for plotting dfs from csvs """ 
+
+
+
+# def scatter_and_barplot_smc(df, xval, yval, hueval, syns_to_exclude, exclude_flag):
+#     cpal = sns.color_palette("Set2")
+#     df_filt = df[~df[exclude_flag].isin(syns_to_exclude)]
+#     fig, ax = pl.subplots(2, 1)
+#     sns.barplot(data=df_filt, x=xval, y=yval, hue=hueval, palette=cpal, ax=ax[0])
+#     synapses = df_filt["Synapse"].unique()
+#     scatter_realvals = df_filt[df_filt["NetworkType"] == "Real"]
+#     scatter_smc = df_filt[df_filt["NetworkType"] == "SNMC_Update"]
+#     x = [scatter_realvals[scatter_realvals["Synapse"] == syn]["NormedToSum"].values[0] for syn in synapses]
+#     y = [scatter_smc[scatter_smc["Synapse"] == syn]["NormedToSum"].values[0] for syn in synapses]
+#     sns.scatterplot(x=x, y=y, ax=ax[1], color=cpal[3])
+#     ax[1].set_xlabel("Real Connection Strength")
+#     ax[1].set_ylabel("SNMC Connection Strength")
+#     y_offset = 0
+#     for xloc, yloc, syn in zip(x, y, synapses):
+#         if xloc == 0 and yloc == 0:
+#             y_off = copy.deepcopy(y_offset)
+#             y_offset += .05
+#             print(syn)
+#         else:
+#             y_off = 0
+#         ax[1].annotate(syn, (xloc + .005, yloc + y_off))
+#         ax[1].set_xlim([-.05, np.max(x) + .1])
+#         ax[1].set_ylim([-.05, np.max(y) + .1])
+#     pl.show()
