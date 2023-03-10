@@ -20,19 +20,13 @@ microcircuit = pd.read_csv("microcircuit.csv")
 microcircuit_probability = pd.read_csv("microcircuit_probabilities.csv")
 microcircuit_probability_bar = pd.read_csv("microcircuit_probs_df.csv")
 
-def make_v1_psp_reference(*snmc_dfs):
+def make_v1_psp_reference():
     v1mouse = pd.read_csv("v1mouse.csv")
     v1_hm = v1mouse.loc[:, v1mouse.columns!="PreSyn"]
-    fracmap = lambda x: fractions.Fraction(x) if not x == "0/0" else np.nan
+    fracmap = lambda x: fractions.Fraction(x, _normalize=False) if not x == "0/0" else np.nan
     v1_fractions = v1_hm.applymap(fracmap)
     v1_decimals = v1_fractions.applymap(np.float)
     v1_fractions["PreSyn"] = v1mouse["PreSyn"]
-    if snmc_dfs != ():
-        fig, ax = pl.subplots(2, 2)
-    else:
-        fig, ax = pl.subplots(1, 2)
-        sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns, ax=ax[0])
-        ax[0].set_title("Campagnola et al. 2022")
     compressed_dict = {}
     pyr_nodes = ["L2e", "L4e", "L5e"]
     inhib_nodes = ["L2i", "L4i", "L5i"]
@@ -42,6 +36,8 @@ def make_v1_psp_reference(*snmc_dfs):
     compressed_df = pd.DataFrame(columns=mc_nodes)
     compressed_df["PreSyn"] = mc_nodes
 
+#    problem here is you're adding too many connections
+    
     def node_to_neuron(source_node, term_node):
         source_layer = source_node[0:2]
         source_identity = source_node[2:5]
@@ -58,15 +54,16 @@ def make_v1_psp_reference(*snmc_dfs):
         source_filtered = v1_fractions.loc[v1_fractions["PreSyn"].isin(source_rows)]
         term_filtered = source_filtered.loc[:, source_filtered.columns.isin(term_columns)]
 
-        # this works but actually adds the fractions instead of adding the num and denom
-
         all_connections = functools.reduce(
-            lambda a,b: a + b, [term_filtered[c].tolist() for c in term_filtered.columns])
+            lambda a, b: a + b, [term_filtered[c].tolist() for c in term_filtered.columns])
         all_connections = list(filter(lambda a: type(a) == fractions.Fraction, all_connections))
+        print(all_connections)        
         if len(all_connections) != 0:
             frac_connection = functools.reduce(
-                lambda a,b: fractions.Fraction(
-                    a.numerator + b.numerator, a.denominator + b.denominator), all_connections)
+                lambda a, b: fractions.Fraction(
+                    a.numerator + b.numerator, a.denominator + b.denominator, _normalize=False),
+                all_connections)
+            print(frac_connection)
         else:
             frac_connection = np.nan
         return frac_connection
@@ -78,51 +75,156 @@ def make_v1_psp_reference(*snmc_dfs):
     # From Lefort et al. b/c Campagnola didn't record these synapses
     compressed_df.loc[compressed_df["PreSyn"] == "L4e", "L5e"] = .116
     compressed_df.loc[compressed_df["PreSyn"] == "L5e", "L4e"] = 0.0
+    excitatory_df = excitatory_only(compressed_df)
+    agnostic_df = compress_to_layers_only(compressed_df)
+    return v1_decimals, compressed_df, excitatory_df, agnostic_df
 
-    if snmc_dfs != ():
-        sns.heatmap(v1_decimals, yticklabels=v1_decimals.columns, ax=ax[0, 0])
-        sns.heatmap(compressed_df.loc[:, compressed_df.columns!="PreSyn"].applymap(np.float),
-                    yticklabels=compressed_df.columns[compressed_df.columns!="PreSyn"], ax=ax[0, 1])
-        snmc_df = snmc_dfs[0]
-        rand_df = snmc_dfs[1]
-        ticklabs = snmc_df["PreSyn"]
-        ax[0, 1].set_title("Real Data")
-        ax[1, 0].set_title("WTA L2, Assemblies L4, Scoring L5")
-        ax[1, 1].set_title("Random SNMC Assignment")
-        sns.heatmap(snmc_df.loc[:, snmc_df.columns!="PreSyn"].applymap(float),
-                    yticklabels=ticklabs, ax=ax[1, 0])
-        sns.heatmap(rand_df.loc[:, rand_df.columns!="PreSyn"].applymap(float),
-                    yticklabels=ticklabs, ax=ax[1, 1])
 
-    else:
-        sns.heatmap(compressed_df.loc[:, compressed_df.columns!="PreSyn"].applymap(np.float),
-                    yticklabels=compressed_df.columns[compressed_df.columns!="PreSyn"], ax=ax[1])
-    pl.tight_layout()
+#def collapse_to_predicted(df):
+
+def map_3():
+    df_excit = excitatory_only(make_v1_psp_reference()[-1])
+    df_agnoistic = collapse_to_layers_only(make_v1_psp_reference()[-1])
+    component_pmap(df_excit, df_agnoistic)
+
+def component_pmap(reference_df1, reference_df2):
+    layers = ["L2", "L4", "L5"]
+    df = pd.DataFrame(columns=layers+["PreSyn"])
+    df["PreSyn"] = layers
+    df.loc[df["PreSyn"] == "L2", "L2"] = 0
+    df.loc[df["PreSyn"] == "L2", "L4"] = 0
+    df.loc[df["PreSyn"] == "L2", "L5"] = 2/8 # WTA hits only muxes
+    df.loc[df["PreSyn"] == "L4", "L2"] = .5 # half of assemblies hit WTA w/ 100% prob
+    df.loc[df["PreSyn"] == "L4", "L4"] = 0  # assemblies aren't interconnected
+    df.loc[df["PreSyn"] == "L4", "L5"] = 2/8 # assemblies hit one mux and one accum.
+    df.loc[df["PreSyn"] == "L4", "L5"] = 2/8 # assemblies hit one mux and one accum.
+    df.loc[df["PreSyn"] == "L5", "L2"] = 0  # scoring doesn't talk to WTA_e
+    df.loc[df["PreSyn"] == "L5", "L4"] = 0  # scoring doesn't project back to assemblie
+    df.loc[df["PreSyn"] == "L5", "L5"] = 6/64
+    # For last calculation: 
+    # q accum only out: (1/8) * 0
+    # q mux to integrator: (1/8) * (1/8)
+    # both integrators to thresholders: (1/4) * (1/8)
+    # qthresh to qaccum: (1/8) * (1/8)
+    # pthresh to pmux: (1/8) * (1/8)
+    # paccum to pint: (1/8) * (1/8)
+    # pmux to nothing: (1/8) * 0
+    return df
+
+def compare_connectivity_maps(
+    
+
+    maxval = np.nanmax(df.loc[:, ~df.columns.isin(["PreSyn"])].values)
+    print(maxval)
+    
+
+    fig, ax = pl.subplots(1,3)
+    sns.heatmap(reference_df1.applymap(float), yticklabels=reference_df1.columns,
+                ax=ax[0], cmap="viridis", vmax=maxval)
+    sns.heatmap((reference_df2.loc[:, ~reference_df2.columns.isin(["PreSyn"])]).applymap(float),
+                yticklabels=df["PreSyn"], cmap="viridis", ax=ax[1], vmax=maxval)
+    sns.heatmap((df.loc[:, ~df.columns.isin(["PreSyn"])]).applymap(float),
+                yticklabels=df["PreSyn"], cmap="viridis", ax=ax[2], vmax=maxval)
+    ax[0].set_title("Allen Micro Excitatory Connections")
+    ax[1].set_title("Allen Micro Agnostic")
+    ax[2].set_title("Component-Based Connection Probability")
     pl.show()
-    return compressed_dict, compressed_df
+
+
+def excitatory_only(df):
+    fig, ax = pl.subplots(1, 1)
+    excit_pre = df[df["PreSyn"].isin(["L2e", "L4e", "L5e"])]
+    excit = excit_pre.loc[:, excit_pre.columns.isin(["L2e", "L4e", "L5e"])]
+    return excit
+    
+
+def compress_to_layers_only(df):
+# need the fractions here, or as a first pass just weight them evenly. (i.e. add the probs, divide by 4).
+    layers = ["L2", "L4", "L5"]
+# probability of l2 to l4, for example is prob 2e to 4e, 2e to 4i, 2i to 4e, 2i to 4i div by 4.
+    layers_only_df = pd.DataFrame(columns=layers+["PreSyn"])
+    layers_only_df["PreSyn"] = layers
+    all_layer_combinations = itertools.product(layers, layers)
+    for syn in all_layer_combinations:
+        prob_e_e = df.loc[df["PreSyn"] == syn[0]+"e"][syn[1]+"e"].values[0]
+        prob_e_i = df.loc[df["PreSyn"] == syn[0]+"e"][syn[1]+"i"].values[0]
+        prob_i_e = df.loc[df["PreSyn"] == syn[0]+"i"][syn[1]+"e"].values[0]
+        prob_i_i = df.loc[df["PreSyn"] == syn[0]+"i"][syn[1]+"i"].values[0]
+        # fix by adding num and denom as accumulators 
+        layers_only_df.loc[layers_only_df["PreSyn"] == syn[0], syn[1]] = (
+            prob_e_e + prob_e_i + prob_i_e + prob_i_i) / 4
+
+# i think the uncommented (above) way of calculating the layers only df is the right idea because we don't know if there's a sampling bias in the Allen Micro dataset. We assume here that half are excitatory and half are inhibitory and weight that way. 
+        
+   #     layers_only_df.loc[layers_only_df["PreSyn"] == syn[0], syn[1]] = functools.reduce(lambda a,b: fractions.Fraction(a.numerator + b.numerator, a.denominator+b.denominator), [
+        #     prob_e_e, prob_e_i, prob_i_e, prob_i_i])
+
+    # also, doing the second version of layers_only_df is hard because we add in the lefort data but its not accumulated -- its a float value. can go back into the dataset and get an n if its there. 
+        
+    return layers_only_df
+
+
+def plot_snmc_vs_real(dfs, layers_only):
+    if layers_only:
+        dfs = list(map(lambda x: collapse_to_layers_only(x), dfs))
+    remove_presyn = list(map(lambda x: x.loc[:, ~x.columns.isin(["PreSyn"])], dfs))
+    fig, ax = pl.subplots(1, len(dfs))
+    for i, ldf in enumerate(remove_presyn):
+        if len(dfs) > 1:
+            sns.heatmap(ldf.applymap(float), ax=ax[i], yticklabels=ldf.columns)
+        else:
+            sns.heatmap(ldf.applymap(float), ax=ax, yticklabels=ldf.columns, cmap="viridis")
+    pl.show()
+        
+
+def generate_snmc_heatmap(collapse_to_layers, snmc_type):
+    num_assemblies = 3
+    assembly_size = 3
+    real = make_v1_psp_reference()[1]
+    snmc = generate_snmc_connectivity(assembly_size, num_assemblies, 1, snmc_type, False)[-1]
+    random = generate_snmc_connectivity(assembly_size, num_assemblies, 1, snmc_type, True)[-1]
+    plot_snmc_vs_real([real, snmc, random], collapse_to_layers)
+    return real, snmc
+    
+    
+    
 
 
 def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snmc_type, randomize_brain_regions):
 
     """ Synapses Per Neuron """
-    
-    if snmc_type == "original":
-        # WTA
+
+    if snmc_type == "allen_micro":
         e_wta_to_e_wta = 0
         e_wta_to_i_wta = 1
-        i_wta_to_e_wta = num_assemblies - 1
-        i_wta_to_i_wta = num_assemblies - 1
+        i_wta_to_e_wta = 0
+        i_wta_to_i_wta = 0
+
+        e_wta_to_assembly_silencer = 1
+        i_wta_to_assembly_silencer = 1
+        
         e_wta_to_e_scoring = 0
         e_wta_to_i_scoring = 0
-        i_wta_to_e_scoring = 2
+        i_wta_to_e_scoring = 2 # P mux and Q mux
         i_wta_to_i_scoring = 0
-        excitatory_wta_intracortical = 1 # state travels to next microcolumn.
-        # Assemblies
-        assembly_to_e_wta = 1
+
+        e_wta_intracortical = 1 # state travels to next microcolumn.        
+
+        assembly_to_e_wta = 0
         assembly_to_i_wta = 0
+        assembly_to_e_assembly_accumulator = 1
+        assembly_to_i_assembly_accumulator = 1
+        e_assembly_accumulator_to_e_wta = 1
+        e_assembly_accumulator_to_i_wta = 0
+        i_assembly_accumulator_to_e_wta = num_assemblies - 1
+        i_assembly_accumulator_to_i_wta = 0
+        assembly_silencer_to_e_assembly_accumulator = num_assemblies - 1
+        assembly_silencer_to_i_assembly_accumulator = num_assemblies - 1
         assembly_to_e_scoring = 2
         assembly_to_i_scoring = 0
-        # Scoring
+
+        q_thresholder_to_assembly_silencer = 1
+        p_thresholder_to_assembly_silencer = 1
         q_accumulator_to_scoring = 1
         q_accumulator_to_norm = 1
         q_thresholder_to_scoring = 2
@@ -133,6 +235,60 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
         inhibitory_mux_to_mux = 0  # one for each mux
         inhibitory_scoring_neurons = 2
         excitatory_scoring_neurons = 4
+
+        e_neurons_per_assembly = assembly_size + 1
+        i_neurons_per_assembly = 2
+   
+        
+    if snmc_type == "original":
+        # WTA
+        e_wta_to_e_wta = 0
+        e_wta_to_i_wta = 1
+        i_wta_to_e_wta = num_assemblies - 1
+        i_wta_to_i_wta = num_assemblies - 1
+
+        e_wta_to_assembly_silencer = 0
+        i_wta_to_assembly_silencer = 0
+        
+        e_wta_to_e_scoring = 0
+        e_wta_to_i_scoring = 0
+        i_wta_to_e_scoring = 2
+        i_wta_to_i_scoring = 0
+        e_wta_intracortical = 1 # state travels to next microcolumn.
+        # Assemblies
+        assembly_to_e_wta = 1
+        assembly_to_i_wta = 0
+        assembly_to_e_scoring = 2
+        assembly_to_i_scoring = 0
+
+        assembly_to_e_assembly_accumulator = 0
+        assembly_to_i_assembly_accumulator = 0
+        e_assembly_accumulator_to_e_wta = 0
+        e_assembly_accumulator_to_i_wta = 0
+        i_assembly_accumulator_to_e_wta = 0
+        i_assembly_accumulator_to_i_wta = 0
+        assembly_silencer_to_e_assembly_accumulator = 0
+        assembly_silencer_to_i_assembly_accumulator = 0
+        e_neurons_per_assembly = assembly_size
+        i_neurons_per_assembly = 0
+        
+        # Scoring
+        q_thresholder_to_assembly_silencer = 0
+        p_thresholder_to_assembly_silencer = 0        
+        q_accumulator_to_scoring = 1
+        q_accumulator_to_norm = 1
+        q_thresholder_to_scoring = 2
+        q_mux_to_scoring = 1
+        p_accumulator_to_scoring = 1
+        p_thresholder_to_scoring = 2
+        p_mux_to_norm = 1
+        inhibitory_mux_to_mux = 0  # one for each mux
+        inhibitory_scoring_neurons = 2
+        excitatory_scoring_neurons = 4
+
+        e_neurons_per_assembly = assembly_size
+        i_neurons_per_assembly = 0
+
         
     if snmc_type == "update":
         # WTA
@@ -144,13 +300,28 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
         e_wta_to_i_scoring = 1
         i_wta_to_e_scoring = 0
         i_wta_to_i_scoring = 0
-        excitatory_wta_intracortical = 1 # state travels to next microcolumn.
+        e_wta_intracortical = 1 # state travels to next microcolumn.
+        e_wta_to_assembly_silencer = 0
+        i_wta_to_assembly_silencer = 0
         # Assemblies
         assembly_to_e_wta = 1
         assembly_to_i_wta = 1
         assembly_to_e_scoring = 2
         assembly_to_i_scoring = 0
+
+        assembly_to_e_assembly_accumulator = 0
+        assembly_to_i_assembly_accumulator = 0
+        e_assembly_accumulator_to_e_wta = 0
+        e_assembly_accumulator_to_i_wta = 0
+        i_assembly_accumulator_to_e_wta = 0
+        i_assembly_accumulator_to_i_wta = 0
+        assembly_silencer_to_e_assembly_accumulator = 0
+        assembly_silencer_to_i_assembly_accumulator = 0
+        e_neurons_per_assembly = assembly_size
+        i_neurons_per_assembly = 0
         # Scoring
+        q_thresholder_to_assembly_silencer = 0
+        p_thresholder_to_assembly_silencer = 0
         q_accumulator_to_scoring = 1
         q_accumulator_to_norm = 1
         q_thresholder_to_scoring = 2
@@ -174,34 +345,58 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     psp_probs["WTA_e", "WTA_i"] = e_wta_to_i_wta / num_assemblies
     psp_probs["WTA_i", "WTA_e"] = i_wta_to_e_wta / num_assemblies
     psp_probs["WTA_i", "WTA_i"] = i_wta_to_i_wta / (num_assemblies-1)
-    psp_probs["WTA_e", "Assemblies_e"] = 0 # update these later with a wta_to_assembly varb that is modable 
+    
+    psp_probs["WTA_e", "Assemblies_e"] = 0 
     psp_probs["WTA_i", "Assemblies_e"] = 0
-    psp_probs["WTA_e", "Assemblies_i"] = 0
-    psp_probs["WTA_i", "Assemblies_i"] = 0 
+    
+    psp_probs["WTA_e", "Assemblies_i"] = e_wta_to_assembly_silencer / num_assemblies
+    psp_probs["WTA_i", "Assemblies_i"] = 0
+
+    
     psp_probs["WTA_e", "Scoring_i"] = e_wta_to_i_scoring / inhibitory_scoring_neurons
     psp_probs["WTA_i", "Scoring_i"] = i_wta_to_i_scoring / inhibitory_scoring_neurons
     psp_probs["WTA_e", "Scoring_e"] = e_wta_to_e_scoring / excitatory_scoring_neurons
     psp_probs["WTA_i", "Scoring_e"] = i_wta_to_e_scoring / excitatory_scoring_neurons
-    psp_probs["Assemblies_e", "WTA_e"] = assembly_to_e_wta / num_assemblies
-    psp_probs["Assemblies_i", "WTA_e"] = 0
+
+    
+    
+    psp_probs["Assemblies_e", "WTA_e"] = (assembly_size / e_neurons_per_assembly) * assembly_to_e_wta / num_assemblies + (1 / e_neurons_per_assembly) * e_assembly_accumulator_to_e_wta / num_assemblies 
+    psp_probs["Assemblies_i", "WTA_e"] = .5 * i_assembly_accumulator_to_e_wta / num_assemblies 
     psp_probs["Assemblies_e", "WTA_i"] = assembly_to_i_wta / num_assemblies
     psp_probs["Assemblies_i", "WTA_i"] = 0
-    psp_probs["Assemblies_e", "Assemblies_e"] = 0
-    psp_probs["Assemblies_e", "Assemblies_i"] = 0
-    psp_probs["Assemblies_i", "Assemblies_e"] = 0
-    psp_probs["Assemblies_i", "Assemblies_i"] = 0
-    psp_probs["Assemblies_e", "Scoring_e"] = assembly_to_e_scoring / excitatory_scoring_neurons
+
+
+    # this isn't correct 
+    psp_probs["Assemblies_e", "Assemblies_e"] = (assembly_size / e_neurons_per_assembly) * ((e_neurons_per_assembly-assembly_size) / (num_assemblies * e_neurons_per_assembly))
+
+
+
+    
+    psp_probs["Assemblies_e", "Assemblies_i"] = (assembly_size / e_neurons_per_assembly) * (assembly_to_i_assembly_accumulator / (num_assemblies * i_neurons_per_assembly))
+     
+    psp_probs["Assemblies_i", "Assemblies_e"] = (assembly_silencer_to_e_assembly_accumulator / i_neurons_per_assembly) * (e_neurons_per_assembly - assembly_size) / e_neurons_per_assembly
+    
+    psp_probs["Assemblies_i", "Assemblies_i"] = (assembly_silencer_to_i_assembly_accumulator / i_neurons_per_assembly) * .5 # connects to all inhib out to wta, no silencers. make this more formal there's no current description the amount of inhibitory output neurons. 
+
+    
+    psp_probs["Assemblies_e", "Scoring_e"] = (assembly_size / e_neurons_per_assembly) * assembly_to_e_scoring / excitatory_scoring_neurons
     psp_probs["Assemblies_i", "Scoring_e"] = 0
-    psp_probs["Assemblies_e", "Scoring_i"] = assembly_to_i_scoring / inhibitory_scoring_neurons
+    psp_probs["Assemblies_e", "Scoring_i"] = (assembly_size / e_neurons_per_assembly) * assembly_to_i_scoring / inhibitory_scoring_neurons
     psp_probs["Assemblies_i", "Scoring_i"] = 0
+
+     
     psp_probs["Scoring_e", "WTA_e"] = 0
     psp_probs["Scoring_e", "WTA_i"] = 0
     psp_probs["Scoring_i", "WTA_i"] = 0
     psp_probs["Scoring_i", "WTA_e"] = 0
     psp_probs["Scoring_e", "Assemblies_e"] = 0
-    psp_probs["Scoring_i", "Assemblies_e"] = 0
+
     psp_probs["Scoring_e", "Assemblies_i"] = 0
-    psp_probs["Scoring_i", "Assemblies_i"] = 0
+
+    psp_probs["Scoring_i", "Assemblies_e"] = 0
+     # every inhibitory neuron projects to every silencer, no L4 output neurons. 
+    psp_probs["Scoring_i", "Assemblies_i"] = .5
+     
     psp_probs["Scoring_e", "Scoring_i"] = (.25 * q_mux_to_scoring / inhibitory_scoring_neurons) + (
         .25 * p_accumulator_to_scoring / inhibitory_scoring_neurons) # two other excitatory types pmux to norm and q_accum to norm, which don't connect to anything locally.
     psp_probs["Scoring_i", "Scoring_i"] = 0
@@ -233,7 +428,7 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     connections["Scoring", "Scoring"] = q_accumulator_to_scoring + q_accumulator_to_norm + q_thresholder_to_scoring + q_mux_to_scoring + p_accumulator_to_scoring + p_thresholder_to_scoring + p_mux_to_norm + (num_assemblies * inhibitory_mux_to_mux)
     connections["WTA", "WTA"] = num_assemblies * (excitatory_wta_to_wta + inhibitory_wta_to_wta)
     connections["WTA", "Scoring"] = num_assemblies * (inhibitory_wta_to_scoring + excitatory_wta_to_scoring)
-    connections["WTA", "DownstreamVariable"] = num_assemblies * excitatory_wta_intracortical
+    connections["WTA", "DownstreamVariable"] = num_assemblies * e_wta_intracortical
     connections["Assemblies", "WTA"] = num_assemblies * assembly_size * assembly_to_wta
     connections["Assemblies", "Scoring"] = num_assemblies * assembly_size * assembly_to_scoring
     connections.update((k, v*num_particles) for k, v in connections.items())
@@ -304,6 +499,10 @@ def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snm
     return synapse_dictionary, compressed_synapse_dictionary, random_brain_snmc_pairings, psp_df
 
 
+
+
+
+
 """ Macro Scale Connectivity """ 
 
 def create_realsynapse_dictionary(connectivity_df):
@@ -332,9 +531,9 @@ def make_snmc_and_reference_dicts(real_df, assembly_size, num_assemblies,
         "original", False)[1]
     reference_snmc_update = generate_snmc_connectivity(
         assembly_size, num_assemblies, num_particles,
-        "update", False)[1]
+        "allen_micro", False)[1]
     _, random_snmc, random_snmc_pairings, psps = generate_snmc_connectivity(
-        assembly_size, num_assemblies, num_particles, "update", True)
+        assembly_size, num_assemblies, num_particles, "allen_micro", True)
     realkeys = realsyn_dict.keys()
     norm_syn_dicts = []
     all_syn_dicts = [realsyn_dict, reference_snmc_orig, reference_snmc_update, random_snmc]
@@ -371,38 +570,53 @@ def average_n_snmc_simulations(n, syns_to_exclude):
                        for i in range(n)]
     avg_rand = {}
     for k, v in rand_snmc_dicts[0].items():
-        avg_rand[k] = np.median(list(map(lambda x: x[k], rand_snmc_dicts)))
+        avg_rand[k] = np.mean(list(map(lambda x: x[k], rand_snmc_dicts)))
     return avg_rand
 
+# this is correct. distributes randomness evenly across all synapses 
 
 def final_barplot_and_scatter(syns_to_exclude):
-    normalized_connectivity = make_snmc_and_reference_dicts(longrange, 3, 3, 1, syns_to_exclude)
+    normalized_connectivity = make_snmc_and_reference_dicts(longrange, 3, 3, 1,
+                                                            syns_to_exclude)
     avg_random_dict = average_n_snmc_simulations(100, syns_to_exclude)
     barplot_snmc_vs_real(normalized_connectivity[0:3] + [avg_random_dict])
-    make_scatter_from_syndicts(normalized_connectivity[0], avg_random_dict)
-    make_scatter_from_syndicts(normalized_connectivity[0], normalized_connectivity[1])
-
-
-def make_scatter_from_syndicts(d1, d2):
+    make_scatter_from_syndicts(normalized_connectivity[0], normalized_connectivity[1], avg_random_dict)
+    
+def make_scatter_from_syndicts(real_d, comp_1, comp_2):
     cpal = sns.color_palette("Set2")
     xs = []
-    ys = []
+    ys_1 = []
+    ys_2 = []
     yoffset = 0
     y_off = 0
-    fig, ax = pl.subplots(1, 1, figsize=(9, 4))
-    for k, v in d1.items():
+    fig, ax = pl.subplots(1, 2)
+    for k, v in real_d.items():
         x = v
-        y = d2[k]
-        if x == 0 and y == 0:
+        y1 = comp_1[k]
+        if x == 0 and y1 == 0:
             y_off = copy.deepcopy(yoffset)
-            yoffset += .08
+            yoffset += .02
         else:
             y_off = 0
-        ax.annotate(k[0]+'-'+k[1], (x, y+y_off))
+        ax[0].annotate(k[0]+'-'+k[1], (x, y1+y_off))
         xs.append(x)
-        ys.append(y)
-    sns.scatterplot(x=xs, y=ys, ax=ax, color=cpal[3])
-    pl.tight_layout()
+        ys_1.append(y1)
+    yoffset = 0
+    y_off = 0
+    for k, v in real_d.items():
+        x = v
+        y2 = comp_2[k]
+        if x == 0 and y2 == 0:
+            y_off = copy.deepcopy(yoffset)
+            yoffset += .02
+        else:
+            y_off = 0
+        ax[1].annotate(k[0]+'-'+k[1], (x, y2+y_off))
+        ys_2.append(y2)
+
+    sns.scatterplot(x=xs, y=ys_1, ax=ax[0], color=cpal[3])
+    sns.scatterplot(x=xs, y=ys_2, ax=ax[1], color=cpal[2])
+#    pl.tight_layout()
     pl.show()
     
 #     y_offset = 0
