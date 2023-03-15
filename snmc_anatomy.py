@@ -75,19 +75,65 @@ def make_v1_psp_reference():
     # From Lefort et al. b/c Campagnola didn't record these synapses
     compressed_df.loc[compressed_df["PreSyn"] == "L4e", "L5e"] = .116
     compressed_df.loc[compressed_df["PreSyn"] == "L5e", "L4e"] = 0.0
-    excitatory_df = excitatory_only(compressed_df)
+    excitatory_df = compress_to_excitatory_only(compressed_df)
     agnostic_df = compress_to_layers_only(compressed_df)
     return v1_decimals, compressed_df, excitatory_df, agnostic_df
 
 
-#def collapse_to_predicted(df):
+def component_internals(num_assemblies, assembly_size):
+    layers = ["L2", "L4", "L5"]
+    df = pd.DataFrame(columns=layers+["PreSyn"])
+    df["PreSyn"] = layers
+    total_L2 = num_assemblies * 3
+    
+    l4_autonorm_size = 3
+    # one for p one for q
+    total_L4 = 2 * (l4_autonorm_size + (num_assemblies * assembly_size)) 
 
-def map_3():
-    df_excit = excitatory_only(make_v1_psp_reference()[-1])
-    df_agnoistic = collapse_to_layers_only(make_v1_psp_reference()[-1])
-    component_pmap(df_excit, df_agnoistic)
+    mux_size = (2 * num_assemblies * assembly_size) + num_assemblies
+    # have to resolve the dot that connects the outputs of the mux. that has to be a neuron. 
+    ti_k_size = 2
+    gate_size = 2
 
-def component_pmap(reference_df1, reference_df2):
+    # one for P one for Q
+    total_L5 = 2 * (mux_size + ti_k_size + gate_size)
+
+    total_circuit_size = total_L2 + total_L4 + total_L5
+
+    print(total_L5)
+    
+    df.loc[df["PreSyn"] == "L2", "L2"] = ((num_assemblies / total_L2) * (num_assemblies / total_L2)) + ((num_assemblies / total_L2) * (1 / total_L2))
+
+    # state feedback to assemblies.
+    df.loc[df["PreSyn"] == "L2", "L4"] = (num_assemblies / total_L2) * (
+        (2 * (num_assemblies * assembly_size)) / total_L4)
+    df.loc[df["PreSyn"] == "L2", "L5"] = (num_assemblies / total_L2) * (assembly_size / total_L5) * 2
+    df.loc[df["PreSyn"] == "L4", "L2"] = ((2 * (assembly_size * num_assemblies)) / total_L4) * (1 / num_assemblies) * (num_assemblies / total_L2) # normed to total theta gate neurons and only hits a single one. (= 1/ total_L2)
+    
+    # all assembly neurons project to two autonorm inhibitory cells.
+    # one inhibitory cell projects directly back to assemblies, the other to a tonic excitatory
+    # neuron that excites the assemblies (almost identical to george's drawing "Autonorm_Multiply"
+    df.loc[df["PreSyn"] == "L4", "L4"] = (2 * num_assemblies * assembly_size / total_L4) * (4 / total_L4) + (2 * (2 / total_L4) * (2 * num_assemblies * assembly_size / total_L4)) + (2 / total_L4) * (1 / total_L4)
+
+    
+    df.loc[df["PreSyn"] == "L4", "L5"] = 2 * (((2 * assembly_size * num_assemblies) / total_L4) * (1 / total_L5) + ((2 * assembly_size * num_assemblies) / total_L4) * (1 / total_L5)) # assemblies to gate , assemblies to Mux twice.
+
+    
+    df.loc[df["PreSyn"] == "L5", "L2"] = (1 / total_L5) * (num_assemblies / total_L2)
+    # want to clear the autonorm for the next step. ti_k to inhibitory assembly neurons (excitatory returns to tonic)
+    df.loc[df["PreSyn"] == "L5", "L4"] = (2 / total_L5) * (l4_autonorm_size - 1) / total_L4
+    
+    df.loc[df["PreSyn"] == "L5", "L5"] = (num_assemblies / total_L5) * (1 / total_L5) + (2 / total_L5) * (1 / total_L5) + (2 / total_L5) * (1/ total_L5) + (2 / total_L5) * (1/ total_L5) + (1 / total_L5) * (1 / total_L5) + ((2 * num_assemblies * assembly_size) / total_L5) * (1 / total_L5) + (2 * (num_assemblies * assembly_size / total_L5) * (1 / total_L5))
+    # last is Mux to Mux where black nodes are a neuron. 
+
+    
+
+    
+    return df, total_circuit_size
+    
+    
+
+def component_pmap():
     layers = ["L2", "L4", "L5"]
     df = pd.DataFrame(columns=layers+["PreSyn"])
     df["PreSyn"] = layers
@@ -111,30 +157,25 @@ def component_pmap(reference_df1, reference_df2):
     # pmux to nothing: (1/8) * 0
     return df
 
-def compare_connectivity_maps(
-    
-
-    maxval = np.nanmax(df.loc[:, ~df.columns.isin(["PreSyn"])].values)
-    print(maxval)
-    
-
-    fig, ax = pl.subplots(1,3)
-    sns.heatmap(reference_df1.applymap(float), yticklabels=reference_df1.columns,
-                ax=ax[0], cmap="viridis", vmax=maxval)
-    sns.heatmap((reference_df2.loc[:, ~reference_df2.columns.isin(["PreSyn"])]).applymap(float),
-                yticklabels=df["PreSyn"], cmap="viridis", ax=ax[1], vmax=maxval)
-    sns.heatmap((df.loc[:, ~df.columns.isin(["PreSyn"])]).applymap(float),
-                yticklabels=df["PreSyn"], cmap="viridis", ax=ax[2], vmax=maxval)
-    ax[0].set_title("Allen Micro Excitatory Connections")
-    ax[1].set_title("Allen Micro Agnostic")
-    ax[2].set_title("Component-Based Connection Probability")
+def compare_connectivity_maps(df_list, titles):
+    maxval = np.max([np.nanmax(df.loc[:, ~df.columns.isin(["PreSyn"])].values) for df in df_list])
+    fig, ax = pl.subplots(1, len(df_list))
+    for i, (df, title) in enumerate(zip(df_list, titles)):
+        if len(titles) > 1:
+            sns.heatmap((df.loc[:, ~df.columns.isin(["PreSyn"])]).applymap(float),
+                        yticklabels=df["PreSyn"], cmap="viridis", ax=ax[i], vmax=maxval)
+            ax[i].set_title(title)
+        else:
+            sns.heatmap((df.loc[:, ~df.columns.isin(["PreSyn"])]).applymap(float),
+                        yticklabels=df["PreSyn"], cmap="viridis", ax=ax, vmax=maxval)
+            ax.set_title(title)
     pl.show()
 
 
-def excitatory_only(df):
+def compress_to_excitatory_only(df):
     fig, ax = pl.subplots(1, 1)
     excit_pre = df[df["PreSyn"].isin(["L2e", "L4e", "L5e"])]
-    excit = excit_pre.loc[:, excit_pre.columns.isin(["L2e", "L4e", "L5e"])]
+    excit = excit_pre.loc[:, excit_pre.columns.isin(["PreSyn", "L2e", "L4e", "L5e"])]
     return excit
     
 
@@ -145,14 +186,21 @@ def compress_to_layers_only(df):
     layers_only_df = pd.DataFrame(columns=layers+["PreSyn"])
     layers_only_df["PreSyn"] = layers
     all_layer_combinations = itertools.product(layers, layers)
+    excitatory_weight = .9
+    inhibitory_weight = 1 - excitatory_weight
+    weight_cartesian = list(itertools.product([excitatory_weight, inhibitory_weight], [excitatory_weight, inhibitory_weight]))
+    unnormed_weights = list(map(lambda x: x[0] * x[1], weight_cartesian))
+    weights = np.array(unnormed_weights) / np.sum(unnormed_weights)
+    print(weights)
     for syn in all_layer_combinations:
         prob_e_e = df.loc[df["PreSyn"] == syn[0]+"e"][syn[1]+"e"].values[0]
         prob_e_i = df.loc[df["PreSyn"] == syn[0]+"e"][syn[1]+"i"].values[0]
         prob_i_e = df.loc[df["PreSyn"] == syn[0]+"i"][syn[1]+"e"].values[0]
         prob_i_i = df.loc[df["PreSyn"] == syn[0]+"i"][syn[1]+"i"].values[0]
         # fix by adding num and denom as accumulators 
-        layers_only_df.loc[layers_only_df["PreSyn"] == syn[0], syn[1]] = (
-            prob_e_e + prob_e_i + prob_i_e + prob_i_i) / 4
+        layers_only_df.loc[layers_only_df["PreSyn"] == syn[0], syn[1]] = np.sum(
+            [a*b for a, b in zip(weights, [prob_e_e, prob_e_i, prob_i_e, prob_i_i])])
+        
 
 # i think the uncommented (above) way of calculating the layers only df is the right idea because we don't know if there's a sampling bias in the Allen Micro dataset. We assume here that half are excitatory and half are inhibitory and weight that way. 
         
@@ -160,34 +208,15 @@ def compress_to_layers_only(df):
         #     prob_e_e, prob_e_i, prob_i_e, prob_i_i])
 
     # also, doing the second version of layers_only_df is hard because we add in the lefort data but its not accumulated -- its a float value. can go back into the dataset and get an n if its there. 
-        
     return layers_only_df
 
 
-def plot_snmc_vs_real(dfs, layers_only):
-    if layers_only:
-        dfs = list(map(lambda x: collapse_to_layers_only(x), dfs))
-    remove_presyn = list(map(lambda x: x.loc[:, ~x.columns.isin(["PreSyn"])], dfs))
-    fig, ax = pl.subplots(1, len(dfs))
-    for i, ldf in enumerate(remove_presyn):
-        if len(dfs) > 1:
-            sns.heatmap(ldf.applymap(float), ax=ax[i], yticklabels=ldf.columns)
-        else:
-            sns.heatmap(ldf.applymap(float), ax=ax, yticklabels=ldf.columns, cmap="viridis")
-    pl.show()
-        
-
-def generate_snmc_heatmap(collapse_to_layers, snmc_type):
+def generate_snmc_psps(num_assemblies, assembly_size, snmc_type):
     num_assemblies = 3
     assembly_size = 3
-    real = make_v1_psp_reference()[1]
     snmc = generate_snmc_connectivity(assembly_size, num_assemblies, 1, snmc_type, False)[-1]
     random = generate_snmc_connectivity(assembly_size, num_assemblies, 1, snmc_type, True)[-1]
-    plot_snmc_vs_real([real, snmc, random], collapse_to_layers)
-    return real, snmc
-    
-    
-    
+    return snmc, random
 
 
 def generate_snmc_connectivity(assembly_size, num_assemblies, num_particles, snmc_type, randomize_brain_regions):
