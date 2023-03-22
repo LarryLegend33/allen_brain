@@ -52,100 +52,70 @@ def assign_components_to_layers(num_assemblies, assembly_size):
                            itertools.product(component_counts.keys(),
                                              ["P", "Q"])}
     del component_counts_pq[("WTA", "P")]
-    assignments = {c: random.choice([2, 4, 5]) for c in component_counts_pq.keys()}
+    assignments = {c: random.choice(["L2", "L4", "L5"]) for c in component_counts_pq.keys()}
     return assignments, component_counts_pq
 
 
 
-def calculate_connection_probabilities(layer_assignment, component_counts, num_assemblies, assembly_size):
+def calculate_connection_probabilities(layer_assignment, component_counts, num_assemblies, assembly_size, assembly_autonorm_size):
     # these are going to be layer by layer.
     # first make a dataframe with pre and post by layer
     # iterate through the product of layers 2,4,5.
     # collect all components in pre and post.
     # calculate probabilities based on total neurons in each layer.
-
     # "total neurons" returns the total size of the layer that the component is assigned to.
-
 # call is probability_table(k[0][0], k[1][0])(k[0][1], k[1][1]) after iterating through product of all elements with p and q. 
-
 # now you'll get a connection probability for each pairwise p and q component in terms of layers.
-
     components = ["MUX", "GATE", "TIK", "WTA", "Assemblies"]
-
     # initialize w zero prob connections
     probability_table = {c: lambda p: 0 for c in itertools.product(components,
-                                                                   components)}
+                                                                    components)}
     ly = layer_assignment
     cc = component_counts
-    probability_table["WTA", "WTA"]: ((num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc) *
-                                       (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc))) + 2 *
-                                      ((num_assemblies / total_WTA) * (1 / total_WTA))
-                                      
-    probability_table["WTA", "Assemblies"] = lambda p_or_q: num_assemblies / total_neurons(("WTA", p_or_q), layer_assignment, component_counts) * assembly_size / total_neurons("MUX", layer_assignment, component_counts)
+    # WTA theta gate connects to all wta blue. wta blue connect to only one red. red connect to only one blue.
+    # there are num_assemblies of each.
+    probability_table["WTA", "WTA"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) + 2 * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
+
+    # this should be num_assemblies * assembly_size --- its one to all fan out.
+    probability_table["WTA", "Assemblies"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[1]), ly, cc))
     
-    probability_table["WTA", "MUX"] = lambda p_or_q: num_assemblies / total_neurons(("WTA", p_or_q), layer_assignment, component_counts) * assembly_size / total_neurons("MUX", layer_assignment, component_counts)
+    probability_table["WTA", "MUX"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (assembly_size / total_layer_neurons(("MUX", pq[1]), ly, cc))
+
+    probability_table["Assemblies", "WTA"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(
+        ("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
+
+    probability_table["Assemblies", "Assemblies"] = lambda pq: 0 if pq[0] != pq[1] else (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc))
+                                                 
+    probability_table["Assemblies", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
+
+    probability_table["Assemblies", "GATE"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
+
+    probability_table["Assemblies", "TIK"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("TIK", pq[1]), ly, cc)) if pq[0] == pq[1] == "P" else 0
+
+    probability_table["MUX", "TIK"] = lambda pq: (num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (1 / total_layer_neurons(("TIK", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
+
+    probability_table["MUX", "GATE"] = lambda pq: (num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc)) if pq[0] == pq[1] == "P" else 0
+
+    probability_table["TIK", "WTA"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", pq[1]), ly, cc))
+
+    probability_table["TIK", "Assemblies"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (
+        (assembly_autonorm_size - 1) / total_layer_neurons(("Assemblies", pq[1]), ly, cc))
+
+    probability_table["TIK", "GATE"] = lambda pq: 0 if pq[0] != pq[1] else (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc))
+
+    probability_table["TIK", "TIK"] = lambda pq: 0 if pq[0] != pq[1] else (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("TIK", pq[1]), ly, cc))
     
-    probability_table["Assemblies", "WTA"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
+    probability_table["MUX", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else (((num_assemblies * assembly_size) / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (2 / total_layer_neurons(("MUX", pq[1]), ly, cc))) + ((num_assemblies * assembly_size / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc)))
 
-    probability_table["Assemblies", "Assemblies"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-    
-    probability_table["Assemblies", "MUX"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-
-    probability_table["Assemblies", "GATE"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-
-    probability_table["TIK", "WTA"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-
-    probability_table["TIK", "Assemblies"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-
-    probability_table["MUX", "TIK"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-
-    probability_table["TIK", "GATE"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-
-    probability_table["TIK", "TIK"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-    
-    probability_table["MUX", "MUX"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-    probability_table["MUX", "GATE"]: (num_assemblies * assembly_size) / total_neurons("Assemblies") * 1 / total_neurons("WTA")
-
-
-
-# need an if statement for if p_or_q[0] == p_or_q[1] for prob calculation. this is it. great. then just index each layer to layer in a loop over a dataframe's pre and post values. it will make a layer by layer probability map.  
-        
-
-
-
-    component_df.loc[component_df["PreSyn"] == "WTA", "WTA"] = ((num_assemblies / total_WTA) * (num_assemblies / total_WTA)) + 2 * ((num_assemblies / total_WTA) * (1 / total_WTA))
-    # state feedback to assemblies.
-    component_df.loc[component_df["PreSyn"] == "WTA", "Assemblies"] = (num_assemblies / total_WTA) * (
-        (2 * (num_assemblies * assembly_size)) / total_Assemblies)
-    component_df.loc[component_df["PreSyn"] == "WTA", "Scoring"] = (num_assemblies / total_WTA) * (assembly_size / total_Scoring) * 2
-    component_df.loc[component_df["PreSyn"] == "Assemblies", "WTA"] = ((2 * (assembly_size * num_assemblies)) / total_Assemblies) * (1 / num_assemblies) * (num_assemblies / total_WTA) # normed to total theta gate neurons and only hits a single one. (= 1/ total_WTA)
-    # all assembly neurons project to two autonorm inhibitory cells.
-    # one inhibitory cell projects directly back to assemblies, the other to a tonic excitatory
-    # neuron that excites the assemblies (almost identical to george's drawing "Autonorm_Multiply"
-    component_df.loc[component_df["PreSyn"] == "Assemblies", "Assemblies"] = (2 * num_assemblies * assembly_size / total_Assemblies) * (4 / total_Assemblies) + (2 * (2 / total_Assemblies) * (2 * num_assemblies * assembly_size / total_Assemblies)) + (2 / total_Assemblies) * (1 / total_Assemblies)
-    component_df.loc[component_df["PreSyn"] == "Assemblies", "Scoring"] = 2 * (((2 * assembly_size * num_assemblies) / total_Assemblies) * (1 / total_Scoring) + ((2 * assembly_size * num_assemblies) / total_Assemblies) * (1 / total_Scoring)) # assemblies to gate , assemblies to Mux twice.
-    component_df.loc[component_df["PreSyn"] == "Scoring", "WTA"] = (1 / total_Scoring) * (num_assemblies / total_WTA)
-    # want to clear the autonorm for the next step. ti_k to inhibitory assembly neurons (excitatory returns to tonic)
-    component_df.loc[component_df["PreSyn"] == "Scoring", "Assemblies"] = (2 / total_Scoring) * (assembly_autonorm_size - 1) / total_Assemblies
-    component_df.loc[component_df["PreSyn"] == "Scoring", "Scoring"] = (num_assemblies / total_Scoring) * (1 / total_Scoring) + (2 / total_Scoring) * (1 / total_Scoring) + (2 / total_Scoring) * (1/ total_Scoring) + (2 / total_Scoring) * (1/ total_Scoring) + ((2 * num_assemblies * assembly_size) / total_Scoring) * (2 / total_Scoring) + (2 * (num_assemblies * assembly_size / total_Scoring) * (1 / total_Scoring)) # last two are all excit mux to inhib mux and accum mux node. all inhib to all excit.
-
-
-
-    
-    
-  #  def make_probability_table(layer_assignment, component_counts):
-                          
-        # list out actual connections here. 
-
-        
-    
-
-
-    
-    
-
-#def component_probabilities():
-
+    layers = ["L2", "L4", "L5"]
+    layer_df = pd.DataFrame(np.zeros(shape=(len(layers), len(layers))), columns=layers)
+    layer_df["PreSyn"] = layers
+    for pre, post in itertools.product(layer_assignment.keys(), layer_assignment.keys()):
+        print(layer_assignment[pre], layer_assignment[post])
+        print(probability_table[pre[0], post[0]]([pre[1], post[1]]))
+        layer_df.loc[
+            layer_df["PreSyn"] == layer_assignment[pre], layer_assignment[post]] += probability_table[pre[0], post[0]]([pre[1], post[1]])
+    return probability_table, layer_df
 
 
 
