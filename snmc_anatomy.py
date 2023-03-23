@@ -3,6 +3,7 @@ import seaborn as sns
 import pandas as pd
 from functools import reduce
 from matplotlib import pyplot as pl
+import matplotlib.patches as mpatches
 import copy
 from random import shuffle
 import itertools
@@ -10,6 +11,8 @@ import math
 import fractions
 import random
 from scipy.stats import pearsonr, linregress
+from sklearn.metrics import mean_squared_error
+from more_itertools import chunked
 
 # note that longrange_bar is currently normed to V1 self connectivity because
 # that is a valid reference in a Syn-EGFP experiment. However, the problem of norming everything to that
@@ -52,7 +55,7 @@ def assign_components_to_layers(num_assemblies, assembly_size):
                            itertools.product(component_counts.keys(),
                                              ["P", "Q"])}
     del component_counts_pq[("WTA", "P")]
-    assignments = {c: random.choice(["L2", "L4", "L5"]) for c in component_counts_pq.keys()}
+    assignments = {c: np.random.choice(["L2", "L4", "L5"]) for c in component_counts_pq.keys()}
     return assignments, component_counts_pq
 
 
@@ -69,7 +72,7 @@ def calculate_connection_probabilities(layer_assignment, component_counts, num_a
     components = ["MUX", "GATE", "TIK", "WTA", "Assemblies"]
     # initialize w zero prob connections
     probability_table = {c: lambda p: 0 for c in itertools.product(components,
-                                                                    components)}
+                                                                   components)}
     ly = layer_assignment
     cc = component_counts
     # WTA theta gate connects to all wta blue. wta blue connect to only one red. red connect to only one blue.
@@ -111,12 +114,13 @@ def calculate_connection_probabilities(layer_assignment, component_counts, num_a
     layer_df = pd.DataFrame(np.zeros(shape=(len(layers), len(layers))), columns=layers)
     layer_df["PreSyn"] = layers
     for pre, post in itertools.product(layer_assignment.keys(), layer_assignment.keys()):
-        print(layer_assignment[pre], layer_assignment[post])
-        print(probability_table[pre[0], post[0]]([pre[1], post[1]]))
         layer_df.loc[
             layer_df["PreSyn"] == layer_assignment[pre], layer_assignment[post]] += probability_table[pre[0], post[0]]([pre[1], post[1]])
     return probability_table, layer_df
 
+
+
+# run this a bunch of times -- compare to a groundtruth dataset. use seaborn error plots. 
 
 
 def make_v1_psp_reference():
@@ -153,11 +157,11 @@ def make_v1_psp_reference():
         source_filtered = v1_fractions.loc[v1_fractions["PreSyn"].isin(source_rows)]
         term_filtered = source_filtered.loc[:, source_filtered.columns.isin(term_columns)]
 
-        all_connections = functools.reduce(
+        all_connections = reduce(
             lambda a, b: a + b, [term_filtered[c].tolist() for c in term_filtered.columns])
         all_connections = list(filter(lambda a: type(a) == fractions.Fraction, all_connections))
         if len(all_connections) != 0:
-            frac_connection = functools.reduce(
+            frac_connection = reduce(
                 lambda a, b: fractions.Fraction(
                     a.numerator + b.numerator, a.denominator + b.denominator, _normalize=False),
                 all_connections)
@@ -191,7 +195,7 @@ def compress_to_layers_only(df):
     layers_only_df = pd.DataFrame(columns=layers+["PreSyn"])
     layers_only_df["PreSyn"] = layers
     all_layer_combinations = itertools.product(layers, layers)
-    excitatory_weight = .9
+    excitatory_weight = .8
     inhibitory_weight = 1 - excitatory_weight
     weight_cartesian = list(itertools.product([excitatory_weight, inhibitory_weight], [excitatory_weight, inhibitory_weight]))
     unnormed_weights = list(map(lambda x: x[0] * x[1], weight_cartesian))
@@ -252,6 +256,109 @@ def component_internals(num_assemblies, assembly_size, snmc_mapping):
     for pre, post in itertools.product(layers, layers):
         layer_df.loc[layer_df["PreSyn"] == pre, post] = component_df.loc[component_df["PreSyn"] == snmc_mapping["V1"+pre], snmc_mapping["V1"+post]].values[0]
     return component_df, layer_df
+
+def random_connectivity_errorplot(num_random_sims, assembly_size, num_assemblies):
+
+    psp_ref = make_v1_psp_reference()
+    psp_agnostic = psp_ref[-1]
+    psp_excitatory = psp_ref[-2]
+    autonorm_size = 3
+    random_dfs = []
+    random_assignments = []
+    for s in range(num_random_sims):
+        l_assgn, compcounts = assign_components_to_layers(num_assemblies, assembly_size)
+        probtable, random_connections = calculate_connection_probabilities(
+            l_assgn, compcounts, num_assemblies, assembly_size, autonorm_size)
+        random_dfs.append(random_connections)
+        random_assignments.append(l_assgn)
+        
+    real_values = []
+    prob_values = []
+    layer_combos = list(itertools.product(["L2", "L4", "L5"], ["L2", "L4", "L5"]))
+    regression_fits = []
+    for rand_df in random_dfs:
+        real_for_df = []
+        prob_for_df = []
+        for pre, post in layer_combos:
+            real_for_df.append(np.round(psp_agnostic.loc[psp_agnostic["PreSyn"] == pre, post].values[0], 4))
+            prob_for_df.append(np.round(rand_df.loc[rand_df["PreSyn"] == pre, post].values[0], 4))
+        slope, intercept, r_value, p_value, std_err = linregress(real_for_df, prob_for_df)
+        regression_fits.append((slope, r_value))
+        real_values += real_for_df
+        prob_values += prob_for_df
+    
+        
+    shepard_informed_assignments = {('MUX', 'P'): 'L5',
+                                    ('MUX', 'Q'): 'L5',
+                                    ('GATE', 'P'): 'L5',
+                                    ('GATE', 'Q'): 'L5',
+                                    ('TIK', 'P'): 'L5',
+                                    ('TIK', 'Q'): 'L5',
+                                    ('WTA', 'Q'): 'L2',
+                                    ('Assemblies', 'P'): 'L4',
+                                    ('Assemblies', 'Q'): 'L4'}
+    
+    our_snmc_df = calculate_connection_probabilities(shepard_informed_assignments,
+                                                     compcounts,
+                                                     num_assemblies,
+                                                     assembly_size,
+                                                     autonorm_size)[1]
+    snmc_probs = []
+    for pre, post in layer_combos:
+        snmc_probs.append(np.round(
+            our_snmc_df.loc[our_snmc_df["PreSyn"] == pre, post].values[0], 4))
+        
+
+    snmc_slope, intercept, snmc_r_value, p_value, std_err = linregress(real_for_df, snmc_probs)
+    regression_fits.append((snmc_slope, snmc_r_value))
+    random_assignments.append(shepard_informed_assignments)
+    avg_random_slope, intercept, avg_random_r_value, p_value, std_err = linregress(real_for_df, np.mean(list(chunked(prob_values, len(layer_combos))), axis=0))
+    print(snmc_slope, snmc_r_value)
+    print(avg_random_slope, avg_random_r_value)
+    fig, ax = pl.subplots(1, 1)
+    cpal = sns.color_palette("Set2")
+    sns.pointplot(x=real_values, y=prob_values, estimator=np.mean, ci=95, join=False, color=cpal[1], ax=ax)
+    sns.pointplot(x=real_values[0:len(layer_combos)], y=snmc_probs, join=False, color=cpal[2], ax=ax)
+    sns.pointplot(x=real_values, y=real_values, markers='', color=cpal[0], ax=ax)
+    sorted_realvals = np.sort(real_values[0:len(layer_combos)])
+    argsorted_realvals = np.argsort(real_values[0:len(layer_combos)])
+    for i, (rv, rvi) in enumerate(zip(sorted_realvals, argsorted_realvals)):
+        ax.annotate(layer_combos[rvi], (i, rv+.01))
+
+    c0 = mpatches.Patch(color=cpal[0], label='Real')
+    c1 = mpatches.Patch(color=cpal[1], label='Random Component Assignment')
+    c2 = mpatches.Patch(color=cpal[2], label='Our Arrangement')
+    ax.set_xlabel("Real")
+    ax.set_ylabel("SNMC")
+    pl.legend(handles=[c0, c1, c2])
+    pl.show()
+
+    mse_slope = [np.sqrt((s[0] - 1)**2) for s in regression_fits]
+    mse_corr = [np.sqrt((r[1] - 1)**2) for r in regression_fits]
+    closest_fits = np.argsort([s+c for s, c in zip(mse_slope, mse_corr)])
+    rank_of_our_snmc = np.where(closest_fits == num_random_sims)
+    
+    return regression_fits, random_assignments, closest_fits, rank_of_our_snmc
+
+    # for pre, post in itertools.product(["L2", "L4", "L5"], ["L2", "L4", "L5"]):
+    #     xval = real_df.loc[real_df["PreSyn"] == pre, post].values[0]
+    #     yval = snmc_df.loc[snmc_df["PreSyn"] == pre, post].values[0]
+    #     xvals.append(float(xval))
+    #     yvals.append(float(yval))
+    #     if plotit:
+    #         ax.annotate(pre+"-" + post, (xval+.001, yval))
+
+    # if plotit:
+    #     ax.scatter(x=xvals, y=yvals, color=cpal[3])
+    #     ax.plot(range(5), range(5))
+    #     ax.set_xlabel("Real")
+    #     ax.set_ylabel("SNMC")
+    #     ax.set_xlim([0, .2])
+    #     ax.set_ylim([0, .5])
+    #     pl.tight_layout()
+    #     pl.show()
+    # slope, intercept, r_value, p_value, std_err = linregress(xvals, yvals)
+
 
 def compare_connectivity_scatter(real_df, snmc_df, plotit):
     if plotit:
