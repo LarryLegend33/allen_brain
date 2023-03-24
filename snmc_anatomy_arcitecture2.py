@@ -64,7 +64,6 @@ def assign_components_to_layers(num_assemblies, assembly_size):
     return assignments, component_counts_pq
 
 
-
 def calculate_connection_probabilities(layer_assignment, component_counts, num_assemblies, assembly_size, assembly_autonorm_size):
     # these are going to be layer by layer.
     # first make a dataframe with pre and post by layer
@@ -82,15 +81,14 @@ def calculate_connection_probabilities(layer_assignment, component_counts, num_a
     cc = component_counts
     # WTA theta gate connects to all wta blue. wta blue connect to only one red. red connect to only one blue.
     # there are num_assemblies of each.
-    probability_table["WTA", "WTA"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) + 2 * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
+    probability_table["WTA", "WTA"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * ((num_assemblies - 1) / total_layer_neurons(("WTA", "Q"), ly, cc)) + 2 * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
 
     # this should be num_assemblies * assembly_size --- its one to all fan out.
     probability_table["WTA", "Assemblies"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (num_assemblies / total_layer_neurons(("Assemblies", pq[1]), ly, cc))
-    
+
     probability_table["WTA", "MUX"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
 
-    probability_table["Assemblies", "WTA"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(
-        ("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
+    probability_table["Assemblies", "WTA"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (2 / total_layer_neurons(("WTA", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
 
     probability_table["Assemblies", "Assemblies"] = lambda pq: 0 if pq[0] != pq[1] else (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (num_assemblies * num_assemblies / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc))
                                                  
@@ -106,7 +104,9 @@ def calculate_connection_probabilities(layer_assignment, component_counts, num_a
 
     probability_table["TIK", "WTA"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", pq[1]), ly, cc))
 
-    probability_table["TIK", "Assemblies"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * ((assembly_autonorm_size - 1) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)) + (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies * num_assemblies) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)
+    probability_table["TIK", "Assemblies"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)) + (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies * num_assemblies) / total_layer_neurons(("Assemblies", pq[1]), ly, cc) if pq[0] == pq[1] else 0
+
+    # probability_table["TIK", "Assemblies"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * ((assembly_autonorm_size - 1) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)) + (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies * num_assemblies) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)
 
     probability_table["TIK", "GATE"] = lambda pq: 0 if pq[0] != pq[1] else (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc))
 
@@ -239,7 +239,8 @@ def random_connectivity_errorplot(num_random_sims, assembly_size, num_assemblies
         
     real_values = []
     prob_values = []
-    layer_combos = list(itertools.product(["L2", "L4", "L5"], ["L2", "L4", "L5"]))
+    layers = ["L2", "L4", "L5"]
+    layer_combos = list(itertools.product(layers, layers))
     regression_fits = []
     for rand_df in random_dfs:
         real_for_df = []
@@ -276,7 +277,15 @@ def random_connectivity_errorplot(num_random_sims, assembly_size, num_assemblies
     snmc_slope, intercept, snmc_r_value, p_value, std_err = linregress(real_for_df, snmc_probs)
     regression_fits.append((snmc_slope, snmc_r_value))
     random_assignments.append(shepard_informed_assignments)
-    avg_random_slope, intercept, avg_random_r_value, p_value, std_err = linregress(real_for_df, np.mean(list(chunked(prob_values, len(layer_combos))), axis=0))
+    average_random = np.median(list(chunked(prob_values, len(layer_combos))), axis=0)
+    avg_random_df = pd.DataFrame(columns=layers)
+    avg_random_df["PreSyn"] = layers
+    for arv, (pre, post) in zip(average_random, layer_combos):
+        avg_random_df.loc[avg_random_df["PreSyn"] == pre, post] = arv
+    
+    avg_random_slope, intercept, avg_random_r_value, p_value, std_err = linregress(
+        real_for_df, average_random)
+    
     print(snmc_slope, snmc_r_value)
     print(avg_random_slope, avg_random_r_value)
     fig, ax = pl.subplots(1, 1)
@@ -302,9 +311,38 @@ def random_connectivity_errorplot(num_random_sims, assembly_size, num_assemblies
     closest_fits = np.argsort([s+c for s, c in zip(se_slope, se_corr)])
     rank_of_our_snmc = np.where(closest_fits == num_random_sims)
     
-    return regression_fits, random_assignments, closest_fits, rank_of_our_snmc
+    return regression_fits, random_assignments, closest_fits, rank_of_our_snmc, [psp_agnostic, our_snmc_df, avg_random_df]
 
-  
+# the next thing you have to do is establish the number of axons that exist in each layer
+# there is one axon per cell per layer of connectivity. what you need is how many connections
+# total (not probability) go from each unit to each unit. you have to write the above generator again so that the total number of axons and not the probability of connecting are encoded. these are not mappable to each other. you have to also add in the resampler, normalizer, and obssync.
+# there is a clear difference in the way this has to be presented becuase there is a loop that returns to the source. this loop cannot exist if even one connection is broken. i still don't quite know how to condition on the existence of this loop.
+
+# you just have to go with "connection is a branch" and branches are visible as axons. you can't say "an axon is one volume even if it connects to other neurons" because to get to the other neuron
+# it has to create a volume. granted that volume might not be as large as the axon itself. have to think about this more, but as a first pass just do number of connections, because there are arguments to be made for both and number of connections is much easier. 
+def generate_cross_component_axons(brain_assignment, component_counts, num_assemblies, assembly_size, num_particles, assembly_autonorm_size):
+    # these are going to be layer by layer.
+    # first make a dataframe with pre and post by layer
+    # iterate through the product of layers 2,4,5.
+    # collect all components in pre and post.
+    # calculate probabilities based on total neurons in each layer.
+    # "total neurons" returns the total size of the layer that the component is assigned to.
+# call is probability_table(k[0][0], k[1][0])(k[0][1], k[1][1]) after iterating through product of all elements with p and q. 
+# now you'll get a connection probability for each pairwise p and q component in terms of layers.
+    components = ["MUX", "GATE", "TIK", "WTA", "Assemblies", "Resampler", "Normalizer", "ObsStateSync"]
+    # initialize w zero prob connections
+    axon_table = {c: lambda p: 0 for c in itertools.product(components,
+                                                            components)}
+
+    # num_assemblies go to P and Q
+    axon_table["WTA", "Assemblies"] = lambda pq: num_assemblies
+    axon_table["WTA", "MUX"] = lambda pq: num_assemblies
+
+#    axon_table["Assemblies", "WTA"] = lambda pq: 0 if pq[0] == pq[1] == "Q"
+
+    
+
+
 
 def compare_connectivity_scatter(real_df, snmc_df, plotit):
     if plotit:
@@ -332,21 +370,21 @@ def compare_connectivity_scatter(real_df, snmc_df, plotit):
     return slope, r_value
 
 def compare_connectivity_heatmap(df_list, titles):
-    maxval = np.max([np.nanmax(df.loc[:, ~df.columns.isin(["PreSyn"])].values) for df in df_list])
+    maxval = np.max([np.nanmax(df.loc[:, ~df.columns.isin(["PreSyn"])].values) for df in df_list]) + .02
     fig, ax = pl.subplots(1, len(df_list))
+    cmap = "BuPu"
     for i, (df, title) in enumerate(zip(df_list, titles)):
         if len(titles) > 1:
             sns.heatmap((df.loc[:, ~df.columns.isin(["PreSyn"])]).applymap(float),
-                        yticklabels=df["PreSyn"], cmap="viridis", ax=ax[i], vmax=maxval)
+                        yticklabels=df["PreSyn"], cmap=cmap, ax=ax[i], vmax=maxval)
             ax[i].set_title(title)
         else:
             sns.heatmap((df.loc[:, ~df.columns.isin(["PreSyn"])]).applymap(float),
-                        yticklabels=df["PreSyn"], cmap="viridis", ax=ax, vmax=maxval)
+                        yticklabels=df["PreSyn"], cmap=cmap, ax=ax, vmax=maxval)
             ax.set_title(title)
     pl.show()
 
-
-
+    
 def generate_snmc_macro_connectivity(assembly_size, num_assemblies, num_particles, randomize_brain_regions):
     # total axons that connect to the layer per circuit. agnostic to multiple connections within layer. 
     autonorm_size = 3
@@ -680,3 +718,65 @@ interesting_random = {'V1L2': 'Assemblies',
                       'S1': 'DownstreamVariable'}
    
 
+
+
+
+
+
+
+
+# def calculate_connection_probabilities(layer_assignment, component_counts, num_assemblies, assembly_size, assembly_autonorm_size):
+#     # these are going to be layer by layer.
+#     # first make a dataframe with pre and post by layer
+#     # iterate through the product of layers 2,4,5.
+#     # collect all components in pre and post.
+#     # calculate probabilities based on total neurons in each layer.
+#     # "total neurons" returns the total size of the layer that the component is assigned to.
+# # call is probability_table(k[0][0], k[1][0])(k[0][1], k[1][1]) after iterating through product of all elements with p and q. 
+# # now you'll get a connection probability for each pairwise p and q component in terms of layers.
+#     components = ["MUX", "GATE", "TIK", "WTA", "Assemblies"]
+#     # initialize w zero prob connections
+#     probability_table = {c: lambda p: 0 for c in itertools.product(components,
+#                                                                    components)}
+#     ly = layer_assignment
+#     cc = component_counts
+#     # WTA theta gate connects to all wta blue. wta blue connect to only one red. red connect to only one blue.
+#     # there are num_assemblies of each.
+#     probability_table["WTA", "WTA"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) + 2 * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
+
+#     # this should be num_assemblies * assembly_size --- its one to all fan out.
+#     probability_table["WTA", "Assemblies"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (num_assemblies / total_layer_neurons(("Assemblies", pq[1]), ly, cc))
+
+#     probability_table["WTA", "MUX"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
+
+#     probability_table["Assemblies", "WTA"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("WTA", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
+
+#     probability_table["Assemblies", "Assemblies"] = lambda pq: 0 if pq[0] != pq[1] else (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (num_assemblies * num_assemblies / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc))
+                                                 
+#     probability_table["Assemblies", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
+
+#     probability_table["Assemblies", "GATE"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
+
+#     probability_table["Assemblies", "TIK"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("TIK", pq[1]), ly, cc)) if pq[0] == pq[1] == "P" else 0
+
+#     probability_table["MUX", "TIK"] = lambda pq: (num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (1 / total_layer_neurons(("TIK", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
+
+#     probability_table["MUX", "GATE"] = lambda pq: (num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc)) if pq[0] == pq[1] == "P" else 0
+
+#     probability_table["TIK", "WTA"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", pq[1]), ly, cc))
+
+#     probability_table["TIK", "Assemblies"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * ((assembly_autonorm_size - 1) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)) + (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies * num_assemblies) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)
+
+#     probability_table["TIK", "GATE"] = lambda pq: 0 if pq[0] != pq[1] else (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc))
+
+#     probability_table["TIK", "TIK"] = lambda pq: 0 if pq[0] != pq[1] else (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("TIK", pq[1]), ly, cc))
+
+#     # blue to red and red to blue. each blue to one red each red to one blue.
+#     probability_table["MUX", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else 2 * (num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
+#     layers = ["L2", "L4", "L5"]
+#     layer_df = pd.DataFrame(np.zeros(shape=(len(layers), len(layers))), columns=layers)
+#     layer_df["PreSyn"] = layers
+#     for pre, post in itertools.product(layer_assignment.keys(), layer_assignment.keys()):
+#         layer_df.loc[
+#             layer_df["PreSyn"] == layer_assignment[pre], layer_assignment[post]] += probability_table[pre[0], post[0]]([pre[1], post[1]])
+#     return probability_table, layer_df
