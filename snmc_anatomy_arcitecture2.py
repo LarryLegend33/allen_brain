@@ -14,10 +14,15 @@ from scipy.stats import pearsonr, linregress
 from sklearn.metrics import mean_squared_error
 from more_itertools import chunked
 
-# note that longrange_bar is currently normed to V1 self connectivity because
-# that is a valid reference in a Syn-EGFP experiment. However, the problem of norming everything to that
-# is that SNMC_Update and SNMC have different values for inter-V1. The relative amounts to V1 connections are correct.
-# I think it should be normed by the ratio between the sum of SNMC and the sum of real. 
+
+# difference between architecture 2 and original is WTA reports state to the assemblies
+# via a connection to a single neuron per assembly per state. no more all to all, which doesn't appear to be realistic. 
+# also there is no intermediate MUX neuron. there is only one per state where the layer 4
+# neurons all go to. it doesn't go single neuron then converge. that makes no sense. this gets
+# rid of the black nodes (which i created as neurons). if you want to go back you can by putting the MUX size back to snmc_anatomy.py
+# and readjusting the MUX - MUX and Assembly to MUX probs.
+
+# i also added a connection to stop the state reporting neurons in L4 from firing after TIK hits its count.
 
 longrange = pd.read_csv("longrange.csv")
 longrange_bar = pd.read_csv("longrange_df.csv")
@@ -45,11 +50,11 @@ def total_layer_neurons(component, layer_assignment, component_counts):
 
 def assign_components_to_layers(num_assemblies, assembly_size):
     assembly_autonorm_size = 3
-    component_counts = {"MUX": (2 * num_assemblies * assembly_size) + num_assemblies,
+    component_counts = {"MUX": (2 * num_assemblies),
                         "GATE": 2,
                         "TIK": 2,
                         "WTA": num_assemblies * 3,
-                        "Assemblies": assembly_autonorm_size + (
+                        "Assemblies": (num_assemblies * num_assemblies) + assembly_autonorm_size + (
                             num_assemblies * assembly_size)}
     component_counts_pq = {k: component_counts[k[0]] for k in
                            itertools.product(component_counts.keys(),
@@ -80,14 +85,14 @@ def calculate_connection_probabilities(layer_assignment, component_counts, num_a
     probability_table["WTA", "WTA"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) + 2 * (num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
 
     # this should be num_assemblies * assembly_size --- its one to all fan out.
-    probability_table["WTA", "Assemblies"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[1]), ly, cc))
+    probability_table["WTA", "Assemblies"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (num_assemblies / total_layer_neurons(("Assemblies", pq[1]), ly, cc))
     
-    probability_table["WTA", "MUX"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (assembly_size / total_layer_neurons(("MUX", pq[1]), ly, cc))
+    probability_table["WTA", "MUX"] = lambda pq: (num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
 
     probability_table["Assemblies", "WTA"] = lambda pq: ((num_assemblies * assembly_size) / total_layer_neurons(
         ("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
 
-    probability_table["Assemblies", "Assemblies"] = lambda pq: 0 if pq[0] != pq[1] else (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc))
+    probability_table["Assemblies", "Assemblies"] = lambda pq: 0 if pq[0] != pq[1] else (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (num_assemblies * num_assemblies / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc))
                                                  
     probability_table["Assemblies", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else ((num_assemblies * assembly_size) / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
 
@@ -101,15 +106,14 @@ def calculate_connection_probabilities(layer_assignment, component_counts, num_a
 
     probability_table["TIK", "WTA"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", pq[1]), ly, cc))
 
-    probability_table["TIK", "Assemblies"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (
-        (assembly_autonorm_size - 1) / total_layer_neurons(("Assemblies", pq[1]), ly, cc))
+    probability_table["TIK", "Assemblies"] = lambda pq: (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * ((assembly_autonorm_size - 1) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)) + (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (num_assemblies * num_assemblies) / total_layer_neurons(("Assemblies", pq[1]), ly, cc)
 
     probability_table["TIK", "GATE"] = lambda pq: 0 if pq[0] != pq[1] else (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc))
 
     probability_table["TIK", "TIK"] = lambda pq: 0 if pq[0] != pq[1] else (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("TIK", pq[1]), ly, cc))
-    
-    probability_table["MUX", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else (((num_assemblies * assembly_size) / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (2 / total_layer_neurons(("MUX", pq[1]), ly, cc))) + ((num_assemblies * assembly_size / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc)))
 
+    # blue to red and red to blue. each blue to one red each red to one blue.
+    probability_table["MUX", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else 2 * (num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
     layers = ["L2", "L4", "L5"]
     layer_df = pd.DataFrame(np.zeros(shape=(len(layers), len(layers))), columns=layers)
     layer_df["PreSyn"] = layers
@@ -217,48 +221,9 @@ def compress_to_layers_only(df):
 # here want to redo this in component space. make a random dictionary that goes through each iter.product of layers and indexes the
 # assignment dictionary. 
 
-def component_internals(num_assemblies, assembly_size, snmc_mapping):
-    
-    layers = ["L2", "L4", "L5"]
-    components = ["WTA", "Assemblies", "Scoring"]
-    component_df = pd.DataFrame(columns=components+["PreSyn"])
-    component_df["PreSyn"] = components
-    total_WTA = num_assemblies * 3
-    assembly_autonorm_size = 3
-    # one for p one for q
-    total_Assemblies = 2 * (assembly_autonorm_size + (num_assemblies * assembly_size))
-    mux_size = (2 * num_assemblies * assembly_size) + num_assemblies
-    # have to resolve the dot that connects the outputs of the mux. that has to be a neuron. 
-    ti_k_size = 2
-    gate_size = 2
-    # one for P one for Q
-    total_Scoring = 2 * (mux_size + ti_k_size + gate_size)
-    total_circuit_size = total_WTA + total_Assemblies + total_Scoring
-    component_df.loc[component_df["PreSyn"] == "WTA", "WTA"] = ((num_assemblies / total_WTA) * (num_assemblies / total_WTA)) + 2 * ((num_assemblies / total_WTA) * (1 / total_WTA))
-    # state feedback to assemblies.
-    component_df.loc[component_df["PreSyn"] == "WTA", "Assemblies"] = (num_assemblies / total_WTA) * (
-        (2 * (num_assemblies * assembly_size)) / total_Assemblies)
-    component_df.loc[component_df["PreSyn"] == "WTA", "Scoring"] = (num_assemblies / total_WTA) * (assembly_size / total_Scoring) * 2
-    component_df.loc[component_df["PreSyn"] == "Assemblies", "WTA"] = ((2 * (assembly_size * num_assemblies)) / total_Assemblies) * (1 / num_assemblies) * (num_assemblies / total_WTA) # normed to total theta gate neurons and only hits a single one. (= 1/ total_WTA)
-    # all assembly neurons project to two autonorm inhibitory cells.
-    # one inhibitory cell projects directly back to assemblies, the other to a tonic excitatory
-    # neuron that excites the assemblies (almost identical to george's drawing "Autonorm_Multiply"
-    component_df.loc[component_df["PreSyn"] == "Assemblies", "Assemblies"] = (2 * num_assemblies * assembly_size / total_Assemblies) * (4 / total_Assemblies) + (2 * (2 / total_Assemblies) * (2 * num_assemblies * assembly_size / total_Assemblies)) + (2 / total_Assemblies) * (1 / total_Assemblies)
-    component_df.loc[component_df["PreSyn"] == "Assemblies", "Scoring"] = 2 * (((2 * assembly_size * num_assemblies) / total_Assemblies) * (1 / total_Scoring) + ((2 * assembly_size * num_assemblies) / total_Assemblies) * (1 / total_Scoring)) # assemblies to gate , assemblies to Mux twice.
-    component_df.loc[component_df["PreSyn"] == "Scoring", "WTA"] = (1 / total_Scoring) * (num_assemblies / total_WTA)
-    # want to clear the autonorm for the next step. ti_k to inhibitory assembly neurons (excitatory returns to tonic)
-    component_df.loc[component_df["PreSyn"] == "Scoring", "Assemblies"] = (2 / total_Scoring) * (assembly_autonorm_size - 1) / total_Assemblies
-    component_df.loc[component_df["PreSyn"] == "Scoring", "Scoring"] = (num_assemblies / total_Scoring) * (1 / total_Scoring) + (2 / total_Scoring) * (1 / total_Scoring) + (2 / total_Scoring) * (1/ total_Scoring) + (2 / total_Scoring) * (1/ total_Scoring) + ((2 * num_assemblies * assembly_size) / total_Scoring) * (2 / total_Scoring) + (2 * (num_assemblies * assembly_size / total_Scoring) * (1 / total_Scoring)) # last two are all excit mux to inhib mux and accum mux node. all inhib to all excit.
 
-    # last is Mux to Mux where black nodes are a neuron.
-    layer_df = pd.DataFrame(columns=layers + ["PreSyn"])
-    layer_df["PreSyn"] = layers
-    for pre, post in itertools.product(layers, layers):
-        layer_df.loc[layer_df["PreSyn"] == pre, post] = component_df.loc[component_df["PreSyn"] == snmc_mapping["V1"+pre], snmc_mapping["V1"+post]].values[0]
-    return component_df, layer_df
 
 def random_connectivity_errorplot(num_random_sims, assembly_size, num_assemblies):
-
     psp_ref = make_v1_psp_reference()
     psp_agnostic = psp_ref[-1]
     psp_excitatory = psp_ref[-2]
@@ -316,7 +281,7 @@ def random_connectivity_errorplot(num_random_sims, assembly_size, num_assemblies
     print(avg_random_slope, avg_random_r_value)
     fig, ax = pl.subplots(1, 1)
     cpal = sns.color_palette("Set2")
-    sns.pointplot(x=real_values, y=prob_values, estimator=np.mean, ci=95, join=False, color=cpal[1], ax=ax)
+    sns.pointplot(x=real_values, y=prob_values, estimator=np.median, ci=95, join=False, color=cpal[1], ax=ax)
     sns.pointplot(x=real_values[0:len(layer_combos)], y=snmc_probs, join=False, color=cpal[2], ax=ax)
     sns.pointplot(x=real_values, y=real_values, markers='', color=cpal[0], ax=ax)
     sorted_realvals = np.sort(real_values[0:len(layer_combos)])
