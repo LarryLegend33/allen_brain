@@ -297,9 +297,9 @@ def random_connectivity_errorplot(num_random_sims, assembly_size, num_assemblies
     pl.legend(handles=[c0, c1, c2])
     pl.show()
 
-    mse_slope = [np.sqrt((s[0] - 1)**2) for s in regression_fits]
-    mse_corr = [np.sqrt((r[1] - 1)**2) for r in regression_fits]
-    closest_fits = np.argsort([s+c for s, c in zip(mse_slope, mse_corr)])
+    se_slope = [np.sqrt((s[0] - 1)**2) for s in regression_fits]
+    se_corr = [np.sqrt((r[1] - 1)**2) for r in regression_fits]
+    closest_fits = np.argsort([s+c for s, c in zip(se_slope, se_corr)])
     rank_of_our_snmc = np.where(closest_fits == num_random_sims)
     
     return regression_fits, random_assignments, closest_fits, rank_of_our_snmc
