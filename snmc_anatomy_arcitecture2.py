@@ -381,7 +381,7 @@ def assign_macro_components_to_brainregions():
     return random_brain_snmc_pairings, brain_regions + ["S1"]
 
 
-def macro_axon_comparison(num_random_sims, assembly_size, num_assemblies):
+def macro_axon_calculator(num_random_sims, assembly_size, num_assemblies):
     random_dfs = []
     random_assignments = []
     for s in range(num_random_sims):
@@ -392,12 +392,7 @@ def macro_axon_comparison(num_random_sims, assembly_size, num_assemblies):
                                                             assembly_size)
         random_dfs.append(random_connections)
         random_assignments.append(rand_br_assignment)
-
-    sum_random_axons = reduce(lambda x, y: x + y.loc[:, y.columns!="PreSyn"].values, random_dfs, np.zeros(shape=(7,7)))
-    sum_random_axons /= np.sum(sum_random_axons)
-    average_random_df = pd.DataFrame(sum_random_axons, columns=random_dfs[0].columns[random_dfs[0].columns!="PreSyn"])
-    average_random_df["PreSyn"] = random_dfs[0]["PreSyn"]
-
+        
     snmc_br_assignment = {('MUX', 'P'): 'V1L5',
                           ('MUX', 'Q'): 'V1L5',
                           ('GATE', 'P'): 'V1L5',
@@ -417,7 +412,7 @@ def macro_axon_comparison(num_random_sims, assembly_size, num_assemblies):
                                                       num_assemblies,
                                                       assembly_size)
     
-    return snmc_assignments, random_assignments, random_dfs, average_random_df
+    return snmc_connections, random_assignments, random_dfs
 
 
 def generate_cross_component_axons(brain_assignment, brain_regions,
@@ -440,6 +435,8 @@ def generate_cross_component_axons(brain_assignment, brain_regions,
     axon_table["Resampler", "ObsStateSync"] = lambda pq: 1 + size_obs
     axon_table["WTA", "DependentVariable"] = lambda pq: num_assemblies
     axon_table["ObsStateSync", "DependentVariable"] = lambda pq: 1 + size_obs
+    axon_table["ObsStateSync", "Assemblies"] = lambda pq: size_obs
+    axon_table["ObsStateSync", "WTA"] = lambda pq: 1
     brain_region_df = pd.DataFrame(np.zeros(
         shape=(len(brain_regions), len(brain_regions))),
         columns=brain_regions)
@@ -452,33 +449,55 @@ def generate_cross_component_axons(brain_assignment, brain_regions,
     
 
 
+def make_snmc_macro_comparison(num_sims, assembly_size, num_assemblies):
 
+    real_axons = pd.read_csv("longrange.csv")
+    syns_of_interest = [("V1L2", "S1"), ("V1L4", "S1"), ("V1L5", "S1"),
+                        ("V1L5", "CP"), ("V1L4", "CP"), ("V1L2", "CP"),
+                        ("V1L5", "GPi"), ("V1L4", "GPi"), ("V1L2", "GPi"),
+                        ("CP", "GPi"), ("CP", "V1"), ("CP", "LD"), ("CP", "S1"), 
+                        ("GPi", "CP"), ("GPi", "LD"), ("GPi", "V1"), ("GPi", "S1"),
+                        ("LD", "V1"), ("LD", "CP"), ("LD", "GPi"), ("LD", "S1")]
+    syn_strings = [s[0]+"-"+s[1] for s in syns_of_interest]
+    snmc_df_verbose, random_assignments, random_dfs_verbose = macro_axon_calculator(num_sims, assembly_size, num_assemblies)
 
+    def compress_v1_postsyn(df):
+        v1s = ["V1L2", "V1L4", "V1L5"]
+        v1_postsyn = pd.DataFrame(df[v1s].agg(np.sum, axis=1), columns=["V1"])
+        compressed_df = df.drop(v1s, axis=1)
+        return compressed_df.join(v1_postsyn)
 
+    snmc_df = compress_v1_postsyn(snmc_df_verbose)
+    random_dfs = list(map(lambda x: compress_v1_postsyn(x), random_dfs_verbose))
+    snmc_syn_values = [snmc_df.loc[snmc_df["PreSyn"] == pre, post].values[0] for (pre, post) in syns_of_interest]
+    random_syn_values = [[r_df.loc[r_df["PreSyn"] == pre, post].values[0] for (
+        pre, post) in syns_of_interest] for r_df in random_dfs]
+    real_syn_values = np.array([real_axons.loc[real_axons["PreSyn"] == pre, post].values[0] for (
+        pre, post) in syns_of_interest])
+    real_syn_values /= np.sum(real_syn_values)
+    real_syn_values *= np.sum(snmc_syn_values)
+    axon_values = list(real_syn_values) + snmc_syn_values + list(np.concatenate(random_syn_values, axis=0))
+#    axon_syns = np.concatenate([range(len(syns_of_interest)) for s in range(2 + num_sims)])
+    axon_syns = np.concatenate([syn_strings for s in range(2 + num_sims)])
+#    axon_hues = list(np.zeros(len(real_syn_values))) + list(
+#        np.ones(len(snmc_syn_values))) + list(
+#            2*np.ones(len(axon_values) - (len(snmc_syn_values)+len(real_syn_values))))
+    axon_hues = ["Real" for r in real_syn_values] + ["SNMC" for s in snmc_syn_values] + [
+        "Random" for i in range(len(axon_values) - (len(snmc_syn_values)+len(real_syn_values)))]
+    fig, ax = pl.subplots(1, 1)
+    cpal = sns.color_palette("Set2")
+    sns.barplot(x=axon_syns, y=axon_values, hue=axon_hues, palette=cpal, errwidth=.5)
+    pl.show()
+    return axon_values, axon_syns, axon_hues
+    
 
-# next steps:
-# 1) plots. how should these look? i like the idea of the directed graph, with arrow sizes or alpha corresponding to strength of connection, and a correlation fit to the overall values. that way you can quantitatively see that the fit is good, and qualitatively understand that the loop is predicted by SNMC. 
-
-# how to properly integrate S1 into the diagram. we want to show that the V1 to S1 connection only exists if you put the injection into Layer 2. 
-
-
-
-# Want V1 layer by layer to show that the component wise choices give rise to necessary macro connectivity.
-# Want all loop members forward and backward.
-
-
-# To make a statement about S1's connectivity to the loop, we have to follow a path from S1 to the loop and back. we can do this if it'll make the idea stronger. The main point of the S1 connection is to show that V1 layer choice matters. Probably the best idea, in the random assignment, to disallow anything other than V1 to connect to S1.
+# only thing i'm wondering here is if the LD as "obs" is a bad idea. we know "obs" comes through LGN to V1. might get kickback on that. size_obs is the only free variable other than assembly size and num assemblies. 
 
 # This is a critical piece I think -- figure out how to best normalize the injection data and how to best normalize the S1 projection considering we are only thinking about it from an intercortical perspective.
 
 # what we CAN say is that the parts of CP that V1 is connected to don't seem to pass back to S1.
 # CP does not, neither does GPi. This is good! LD gives a touch to L6 S1, which makes sense.
 # also note that the LD to CP is not real. They are almost definitely fibers of passage leaving the thalamus via the BG. We are not normalizing just saying "injections are approximately equal in volume, and may include off target circuitry". 
-
-syns_of_interest = [("V1L2", "S1"), ("V1L4", "S1"), ("V1L5", "S1"),
-                    ("V1L5", "CP"), ("V1L4", "CP"), ("V1L2", "CP"),
-                    ("V1L5", "GPi"), ("V1L4", "GPi"), ("V1L2", "GPi"),
-                    ("CP", "GPi"), ("CP", "V1"), ("CP", "LD"), ("CP", "S1"), 
-                    ("GPi", "CP"), ("GPi", "LD"), ("GPi", "V1"), ("GPi", "S1"),
-                    ("LD", "V1"), ("LD", "CP"), ("LD", "GPi"), ("LD", "S1")]
                     
+# every one of these synapses is encoded in the real data. you have to get the value for each synapse and then
+# normalize to the sum. the architecture is "the relative node to node connectivity". 
