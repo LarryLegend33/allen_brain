@@ -227,12 +227,11 @@ def compress_to_layers_only(df):
             layers_only_df["PreSyn"] == syn[0], syn[1]] = np.sum(
                 [a*b for a, b in zip(weights,
                                      [prob_e_e, prob_e_i, prob_i_e, prob_i_i])])
-        
     # also, doing the second version of layers_only_df is hard because we add in the lefort data but its not accumulated -- its a float value. can go back into the dataset and get an n if its there. 
     return layers_only_df
 
 
-def random_connectivity_errorplot(num_random_sims, assembly_size, num_assemblies):
+def micro_errorplot(num_random_sims, assembly_size, num_assemblies):
     psp_ref = make_v1_psp_reference()
     psp_agnostic = psp_ref[-1]
     psp_excitatory = psp_ref[-2]
@@ -370,7 +369,7 @@ def compare_micro_connectivity_heatmap(df_list, titles):
 
 longrange = pd.read_csv("longrange.csv")
 
-def assign_components_to_brainregions():
+def assign_macro_components_to_brainregions():
     sample_score_components = ["MUX", "GATE", "TIK", "WTA", "Assemblies"]
     components = list(itertools.product(sample_score_components, ["P", "Q"])) + list(
         itertools.product(["Normalizer", "Resampler", "ObsStateSync"], [""]))
@@ -382,11 +381,11 @@ def assign_components_to_brainregions():
     return random_brain_snmc_pairings, brain_regions + ["S1"]
 
 
-def axon_comparison(num_random_sims, assembly_size, num_assemblies):
+def macro_axon_comparison(num_random_sims, assembly_size, num_assemblies):
     random_dfs = []
     random_assignments = []
     for s in range(num_random_sims):
-        rand_br_assignment, brain_regions = assign_components_to_brainregions()
+        rand_br_assignment, brain_regions = assign_macro_components_to_brainregions()
         random_connections = generate_cross_component_axons(rand_br_assignment,
                                                             brain_regions,
                                                             num_assemblies,
@@ -398,12 +397,32 @@ def axon_comparison(num_random_sims, assembly_size, num_assemblies):
     sum_random_axons /= np.sum(sum_random_axons)
     average_random_df = pd.DataFrame(sum_random_axons, columns=random_dfs[0].columns[random_dfs[0].columns!="PreSyn"])
     average_random_df["PreSyn"] = random_dfs[0]["PreSyn"]
-    return random_assignments, random_dfs, average_random_df
+
+    snmc_br_assignment = {('MUX', 'P'): 'V1L5',
+                          ('MUX', 'Q'): 'V1L5',
+                          ('GATE', 'P'): 'V1L5',
+                          ('GATE', 'Q'): 'V1L5',
+                          ('TIK', 'P'): 'V1L5',
+                          ('TIK', 'Q'): 'V1L5',
+                          ('WTA', 'Q'): 'V1L2',
+                          ('Assemblies', 'P'): 'V1L4',
+                          ('Assemblies', 'Q'): 'V1L4',
+                          ('Normalizer', ''): 'CP',
+                          ('Resampler', ''): 'GPi',
+                          ('ObsStateSync', ''): 'LD',
+                          ('DependentVariable', ''): 'S1'}
+
+    snmc_connections = generate_cross_component_axons(snmc_br_assignment,
+                                                      brain_regions,
+                                                      num_assemblies,
+                                                      assembly_size)
+    
+    return snmc_assignments, random_assignments, random_dfs, average_random_df
 
 
 def generate_cross_component_axons(brain_assignment, brain_regions,
                                    num_assemblies, assembly_size):
-
+    size_obs = 3
     components = list(np.unique([b[0] for b in brain_assignment.keys()]))
     axon_table = {c: lambda pq: 0 for c in itertools.product(components,
                                                              components)}
@@ -418,8 +437,9 @@ def generate_cross_component_axons(brain_assignment, brain_regions,
     axon_table["TIK", "GATE"] = lambda pq: 1 if pq[0] == pq[1] else 0
     axon_table["GATE", "Normalizer"] = lambda pq: 1
     axon_table["Normalizer", "Resampler"] = lambda pq: 1
-    axon_table["Resampler", "ObsStateSync"] = lambda pq: 1
-    axon_table["Resampler", "ObsStateSync"] = lambda pq: 1
+    axon_table["Resampler", "ObsStateSync"] = lambda pq: 1 + size_obs
+    axon_table["WTA", "DependentVariable"] = lambda pq: num_assemblies
+    axon_table["ObsStateSync", "DependentVariable"] = lambda pq: 1 + size_obs
     brain_region_df = pd.DataFrame(np.zeros(
         shape=(len(brain_regions), len(brain_regions))),
         columns=brain_regions)
@@ -436,4 +456,29 @@ def generate_cross_component_axons(brain_assignment, brain_regions,
 
 
 
+# next steps:
+# 1) plots. how should these look? i like the idea of the directed graph, with arrow sizes or alpha corresponding to strength of connection, and a correlation fit to the overall values. that way you can quantitatively see that the fit is good, and qualitatively understand that the loop is predicted by SNMC. 
 
+# how to properly integrate S1 into the diagram. we want to show that the V1 to S1 connection only exists if you put the injection into Layer 2. 
+
+
+
+# Want V1 layer by layer to show that the component wise choices give rise to necessary macro connectivity.
+# Want all loop members forward and backward.
+
+
+# To make a statement about S1's connectivity to the loop, we have to follow a path from S1 to the loop and back. we can do this if it'll make the idea stronger. The main point of the S1 connection is to show that V1 layer choice matters. Probably the best idea, in the random assignment, to disallow anything other than V1 to connect to S1.
+
+# This is a critical piece I think -- figure out how to best normalize the injection data and how to best normalize the S1 projection considering we are only thinking about it from an intercortical perspective.
+
+# what we CAN say is that the parts of CP that V1 is connected to don't seem to pass back to S1.
+# CP does not, neither does GPi. This is good! LD gives a touch to L6 S1, which makes sense.
+# also note that the LD to CP is not real. They are almost definitely fibers of passage leaving the thalamus via the BG. We are not normalizing just saying "injections are approximately equal in volume, and may include off target circuitry". 
+
+syns_of_interest = [("V1L2", "S1"), ("V1L4", "S1"), ("V1L5", "S1"),
+                    ("V1L5", "CP"), ("V1L4", "CP"), ("V1L2", "CP"),
+                    ("V1L5", "GPi"), ("V1L4", "GPi"), ("V1L2", "GPi"),
+                    ("CP", "GPi"), ("CP", "V1"), ("CP", "LD"), ("CP", "S1"), 
+                    ("GPi", "CP"), ("GPi", "LD"), ("GPi", "V1"), ("GPi", "S1"),
+                    ("LD", "V1"), ("LD", "CP"), ("LD", "GPi"), ("LD", "S1")]
+                    
