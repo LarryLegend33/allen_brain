@@ -15,8 +15,11 @@ from sklearn.metrics import mean_squared_error
 from more_itertools import chunked
 
 
+# note that the plot in Janelia_FINAL uses 10 neurons per assembly and 3 assemblies.
+
+
 # difference between architecture 2 and original is WTA reports state to the assemblies
-# via a connection to a single neuron per assembly per state. no more all to all, which doesn't appear to be realistic. 
+# via a connection to a single neuron per assembly per state. no more all to all, which doesn't appear to be realistic.
 # also there is no intermediate MUX neuron. there is only one per state where the layer 4
 # neurons all go to. it doesn't go single neuron then converge. that makes no sense. this gets
 # rid of the black nodes (which i created as neurons). if you want to go back you can by putting the MUX size back to snmc_anatomy.py
@@ -77,57 +80,82 @@ def calculate_connection_probabilities(layer_assignment, component_counts, num_a
                                                                    components)}
     ly = layer_assignment
     cc = component_counts
-    # WTA theta gate connects to all wta blue. wta blue connect to only one red. red connect to only one blue.
-    # there are num_assemblies of each.
+    # Assemblies go to one input blue and one input red. Blue input goes to only one blue WTA. Red goes to all other WTA blue.
     probability_table["WTA", "WTA"] = lambda pq: (
         num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (
-        (num_assemblies - 1) / total_layer_neurons(("WTA", "Q"), ly, cc)) + 2 * (
+        (num_assemblies - 1) / total_layer_neurons(("WTA", "Q"), ly, cc)) + 1 * (
             num_assemblies / total_layer_neurons(
                 ("WTA", "Q"), ly, cc)) * (1 / total_layer_neurons(("WTA", "Q"), ly, cc))
     # this should be num_assemblies * assembly_size --- its one to all fan out.
+
     probability_table["WTA", "Assemblies"] = lambda pq: (
         num_assemblies / total_layer_neurons(("WTA", pq[0]), ly, cc)) * (
             num_assemblies / total_layer_neurons(("Assemblies", pq[1]), ly, cc))
+    
     probability_table["WTA", "MUX"] = lambda pq: (
         num_assemblies / total_layer_neurons(
             ("WTA", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
+
     probability_table["Assemblies", "WTA"] = lambda pq: (
         (num_assemblies * assembly_size) / total_layer_neurons(
             ("Assemblies", pq[0]), ly, cc)) * (2 / total_layer_neurons(
                 ("WTA", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
+
+    # first two entries are assemblies to autonorm and back. next entry is autonorm inhib 1 to autonorm excitatory. last entry is state neurons per assembly that represent previous state of self. each assembly has a set of num_assembly neurons that each represent state and terminate on that assembly's dendrites (assembly_size total synapses from each state neuron).
     probability_table["Assemblies", "Assemblies"] = lambda pq: 0 if pq[0] != pq[1] else (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (2 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (num_assemblies * assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) + (num_assemblies * num_assemblies / total_layer_neurons(("Assemblies", pq[0]), ly, cc)) * (assembly_size / total_layer_neurons(("Assemblies", pq[0]), ly, cc))
+    
     probability_table["Assemblies", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else (
         (num_assemblies * assembly_size) / total_layer_neurons(
             ("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
+
     probability_table["Assemblies", "GATE"] = lambda pq: (
         (num_assemblies * assembly_size) / total_layer_neurons(
             ("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(
                 ("GATE", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
+    
     probability_table["Assemblies", "TIK"] = lambda pq: (
         (num_assemblies * assembly_size) / total_layer_neurons(
             ("Assemblies", pq[0]), ly, cc)) * (1 / total_layer_neurons(
                 ("TIK", pq[1]), ly, cc)) if pq[0] == pq[1] == "P" else 0
+    
     probability_table["MUX", "TIK"] = lambda pq: (
         num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (
             1 / total_layer_neurons(("TIK", pq[1]), ly, cc)) if pq[0] == pq[1] == "Q" else 0
+    
     probability_table["MUX", "GATE"] = lambda pq: (
         num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (
             1 / total_layer_neurons(("GATE", pq[1]), ly, cc)) if pq[0] == pq[1] == "P" else 0
+
+# THESE ARE NEW MAKE SURE IT MAKES SENSE. ITS AN INHIBITORY SIGNAL.
+
+# should be autonormalizing Q according to the amount of spikes that come out of the WINNER. 
+
+# TIK is a 2 neuron circuit with the blue neuron counting K spikes and the red neuron receiving input from the
+# blue neuron after K spikes have been counted. Can reroute excitatory signal to the WTA outputs.
+
+# TIK from P and Q inhibits Gate, self, MUX. Need two excitatory TIKs to start WTA, one to inhibit all the rest.
+# Imagine for now that inhibitory TIK hits the state and assembly neurons of L4, the outputs of self Gates, and itself on the input side. The excitatory output goes to L2 WTA output neurons. WTA output neurons need two TIK excitatory. 
+    
     probability_table["TIK", "WTA"] = lambda pq: (1 / total_layer_neurons(
         ("TIK", pq[0]), ly, cc)) * (num_assemblies / total_layer_neurons(("WTA", pq[1]), ly, cc))
+    
     probability_table["TIK", "Assemblies"] = lambda pq: (
         1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (
             (num_assemblies * assembly_size) / total_layer_neurons(
                 ("Assemblies", pq[1]), ly, cc)) + (1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (
                     num_assemblies * num_assemblies) / total_layer_neurons(("Assemblies", pq[1]), ly, cc) if pq[0] == pq[1] else 0
+    
     probability_table["TIK", "GATE"] = lambda pq: 0 if pq[0] != pq[1] else (
         1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("GATE", pq[1]), ly, cc))
+    
     probability_table["TIK", "TIK"] = lambda pq: 0 if pq[0] != pq[1] else (
         1 / total_layer_neurons(("TIK", pq[0]), ly, cc)) * (1 / total_layer_neurons(("TIK", pq[1]), ly, cc))
+    
     # blue to red and red to blue. each blue to one red each red to one blue.
     probability_table["MUX", "MUX"] = lambda pq: 0 if pq[0] != pq[1] else 2 * (
         num_assemblies / total_layer_neurons(("MUX", pq[0]), ly, cc)) * (
             1 / total_layer_neurons(("MUX", pq[1]), ly, cc))
+    
     layers = ["L2", "L4", "L5"]
     layer_df = pd.DataFrame(np.zeros(shape=(
         len(layers), len(layers))), columns=layers)
@@ -216,7 +244,6 @@ def compress_to_layers_only(df):
     weight_cartesian = list(itertools.product([excitatory_weight, inhibitory_weight], [excitatory_weight, inhibitory_weight]))
     unnormed_weights = list(map(lambda x: x[0] * x[1], weight_cartesian))
     weights = np.array(unnormed_weights) / np.sum(unnormed_weights)
-    print(weights)
     for syn in all_layer_combinations:
         prob_e_e = df.loc[df["PreSyn"] == syn[0]+"e"][syn[1]+"e"].values[0]
         prob_e_i = df.loc[df["PreSyn"] == syn[0]+"e"][syn[1]+"i"].values[0]
@@ -231,7 +258,7 @@ def compress_to_layers_only(df):
     return layers_only_df
 
 
-def micro_errorplot(num_random_sims, assembly_size, num_assemblies):
+def micro_errorplot(num_random_sims, assembly_size, num_assemblies, plotit):
     psp_ref = make_v1_psp_reference()
     psp_agnostic = psp_ref[-1]
     psp_excitatory = psp_ref[-2]
@@ -291,28 +318,45 @@ def micro_errorplot(num_random_sims, assembly_size, num_assemblies):
         avg_random_df.loc[avg_random_df["PreSyn"] == pre, post] = arv
     avg_random_slope, intercept, avg_random_r_value, p_value, std_err = linregress(
         real_for_df, average_random)
-    fig, ax = pl.subplots(1, 1)
-    cpal = sns.color_palette("Set2")
-    sns.pointplot(x=real_values, y=prob_values, estimator=np.median, ci=95, join=False, color=cpal[1], ax=ax)
-    sns.pointplot(x=real_values[0:len(layer_combos)], y=snmc_probs, join=False, color=cpal[2], ax=ax)
-    sns.pointplot(x=real_values, y=real_values, markers='', color=cpal[0], ax=ax)
-    sorted_realvals = np.sort(real_values[0:len(layer_combos)])
-    argsorted_realvals = np.argsort(real_values[0:len(layer_combos)])
-    for i, (rv, rvi) in enumerate(zip(sorted_realvals, argsorted_realvals)):
-        ax.annotate(layer_combos[rvi], (i, rv+.01))
-    c0 = mpatches.Patch(color=cpal[0], label='Real')
-    c1 = mpatches.Patch(color=cpal[1], label='Random Component Assignment')
-    c2 = mpatches.Patch(color=cpal[2], label='Our Arrangement')
-    ax.set_xlabel("Real")
-    ax.set_ylabel("SNMC")
-    pl.legend(handles=[c0, c1, c2])
-    pl.show()
+    if plotit:
+        fig, ax = pl.subplots(1, 1)
+        cpal = sns.color_palette("Set2")
+        sns.pointplot(x=real_values, y=prob_values, estimator=np.median, ci=95, join=False, color=cpal[1], ax=ax)
+        sns.pointplot(x=real_values[0:len(layer_combos)], y=snmc_probs, join=False, color=cpal[2], ax=ax)
+        sns.pointplot(x=real_values, y=real_values, markers='', color=cpal[0], ax=ax)
+        sorted_realvals = np.sort(real_values[0:len(layer_combos)])
+        argsorted_realvals = np.argsort(real_values[0:len(layer_combos)])
+        for i, (rv, rvi) in enumerate(zip(sorted_realvals, argsorted_realvals)):
+            ax.annotate(layer_combos[rvi], (i, rv+.01))
+        c0 = mpatches.Patch(color=cpal[0], label='Real')
+        c1 = mpatches.Patch(color=cpal[1], label='Random Component Assignment')
+        c2 = mpatches.Patch(color=cpal[2], label='Our Arrangement')
+        ax.set_xlabel("Real")
+        ax.set_ylabel("SNMC")
+        pl.legend(handles=[c0, c1, c2])
+        pl.show()
     se_slope = [np.sqrt((s[0] - 1)**2) for s in regression_fits]
     se_corr = [np.sqrt((r[1] - 1)**2) for r in regression_fits]
     closest_fits = np.argsort([s+c for s, c in zip(se_slope, se_corr)])
     rank_of_our_snmc = np.where(closest_fits == num_random_sims)
     return regression_fits, random_assignments, closest_fits, rank_of_our_snmc, [psp_agnostic, our_snmc_df, avg_random_df]
 
+def hist_snmc_rankings():
+    assembly_sizes = range(1, 20)
+    num_assemblies = range(1, 20)
+    assembly_iter = [(a_size, n_assem) for a_size in assembly_sizes for n_assem in num_assemblies]
+    ranks = []
+    for (a, n) in assembly_iter:
+        r = micro_errorplot(50, a, n, False)
+        ranks.append(r[3])
+    rankvals = [rk[0][0] for rk in ranks]
+    cpal = sns.color_palette("Set2")
+    
+        
+    return ranks
+        
+        
+    
 
 def compare_micro_connectivity_scatter(real_df, snmc_df, plotit):
     if plotit:
@@ -449,15 +493,29 @@ def generate_cross_component_axons(brain_assignment, brain_regions,
     
 
 
-def make_snmc_macro_comparison(num_sims, assembly_size, num_assemblies):
+def make_snmc_macro_comparison(num_sims, assembly_size, num_assemblies, compress_v1_outputs):
 
-    real_axons = pd.read_csv("longrange.csv")
-    syns_of_interest = [("V1L2", "S1"), ("V1L4", "S1"), ("V1L5", "S1"),
-                        ("V1L5", "CP"), ("V1L4", "CP"), ("V1L2", "CP"),
-                        ("V1L5", "GPi"), ("V1L4", "GPi"), ("V1L2", "GPi"),
-                        ("CP", "GPi"), ("CP", "V1"), ("CP", "LD"), ("CP", "S1"), 
-                        ("GPi", "CP"), ("GPi", "LD"), ("GPi", "V1"), ("GPi", "S1"),
-                        ("LD", "V1"), ("LD", "CP"), ("LD", "GPi"), ("LD", "S1")]
+    real_axons_csv = pd.read_csv("longrange.csv")
+    real_axons = real_axons_csv.loc[:, ~real_axons_csv.columns.isin(["NetworkType", "Experiment"])]
+    if not compress_v1_outputs:
+        brain_region_dictionary = {s: i for i, s in enumerate(
+            ["V1L2", "V1L4", "V1L5", "CP", "GPi", "LD", "S1"])}
+        syns_of_interest = [("V1L2", "S1"), ("V1L4", "S1"), ("V1L5", "S1"),
+                            ("V1L2", "CP"), ("V1L4", "CP"), ("V1L5", "CP"),
+                            ("V1L2", "LD"), ("V1L4", "LD"), ("V1L5", "LD"),
+                            ("V1L2", "GPi"), ("V1L4", "GPi"), ("V1L5", "GPi"),
+                            ("CP", "GPi"), ("CP", "V1"), ("CP", "LD"), ("CP", "S1"), 
+                            ("GPi", "CP"), ("GPi", "V1"), ("GPi", "LD"), ("GPi", "S1"),
+                            ("LD", "CP"), ("LD", "V1"), ("LD", "GPi"), ("LD", "S1")]
+
+    else:
+        brain_region_dictionary = {s: i for i, s in enumerate(
+            ["V1", "CP", "GPi", "LD", "S1"])}
+        syns_of_interest = [("V1", "S1"), ("V1", "CP"), ("V1", "GPi"), ("V1", "LD"),
+                            ("CP", "GPi"), ("CP", "V1"), ("CP", "LD"), ("CP", "S1"),
+                            ("GPi", "CP"), ("GPi", "V1"), ("GPi", "LD"), ("GPi", "S1"),
+                            ("LD", "CP"), ("LD", "V1"), ("LD", "GPi"), ("LD", "S1")]
+
     syn_strings = [s[0]+"-"+s[1] for s in syns_of_interest]
     snmc_df_verbose, random_assignments, random_dfs_verbose = macro_axon_calculator(num_sims, assembly_size, num_assemblies)
 
@@ -467,28 +525,97 @@ def make_snmc_macro_comparison(num_sims, assembly_size, num_assemblies):
         compressed_df = df.drop(v1s, axis=1)
         return compressed_df.join(v1_postsyn)
 
+    def compress_v1_presyn(df):
+        v1s = ["V1L2", "V1L4", "V1L5"]
+        v1layer_df = df[df["PreSyn"].isin(v1s)]
+        nonv1_df = df[~df["PreSyn"].isin(v1s)]
+        df_syns_only = v1layer_df[["V1", "CP", "GPi", "LD", "S1"]]
+        v1_agg = pd.DataFrame(df_syns_only.agg(np.sum)).transpose()
+        v1_agg["PreSyn"] = "V1"
+        return nonv1_df.append(v1_agg, ignore_index=True)
+        
     snmc_df = compress_v1_postsyn(snmc_df_verbose)
     random_dfs = list(map(lambda x: compress_v1_postsyn(x), random_dfs_verbose))
+
+    if compress_v1_outputs:
+        real_axons = compress_v1_presyn(real_axons)
+        snmc_df = compress_v1_presyn(snmc_df)
+        random_dfs = list(map(lambda x: compress_v1_presyn(x), random_dfs))
+
     snmc_syn_values = [snmc_df.loc[snmc_df["PreSyn"] == pre, post].values[0] for (pre, post) in syns_of_interest]
     random_syn_values = [[r_df.loc[r_df["PreSyn"] == pre, post].values[0] for (
         pre, post) in syns_of_interest] for r_df in random_dfs]
     real_syn_values = np.array([real_axons.loc[real_axons["PreSyn"] == pre, post].values[0] for (
         pre, post) in syns_of_interest])
     real_syn_values /= np.sum(real_syn_values)
-    real_syn_values *= np.sum(snmc_syn_values)
-    axon_values = list(real_syn_values) + snmc_syn_values + list(np.concatenate(random_syn_values, axis=0))
+#    real_syn_values *= np.sum(snmc_syn_values)
+
+    snmc_syn_values_raw = copy.deepcopy(snmc_syn_values)
+    real_syn_normed_to_snmc = real_syn_values * np.sum(snmc_syn_values_raw)
+
+    snmc_syn_values /= np.sum(snmc_syn_values)
+
+    axon_values = list(real_syn_values) + list(snmc_syn_values)   #+ list(np.concatenate(random_syn_values, axis=0))
 #    axon_syns = np.concatenate([range(len(syns_of_interest)) for s in range(2 + num_sims)])
-    axon_syns = np.concatenate([syn_strings for s in range(2 + num_sims)])
+    axon_syns = np.concatenate([syn_strings for s in range(2)])  # + num_sims)])
 #    axon_hues = list(np.zeros(len(real_syn_values))) + list(
 #        np.ones(len(snmc_syn_values))) + list(
 #            2*np.ones(len(axon_values) - (len(snmc_syn_values)+len(real_syn_values))))
-    axon_hues = ["Real" for r in real_syn_values] + ["SNMC" for s in snmc_syn_values] + [
-        "Random" for i in range(len(axon_values) - (len(snmc_syn_values)+len(real_syn_values)))]
+    axon_hues = ["Real" for r in real_syn_values] + ["SNMC" for s in snmc_syn_values] #+ [
+#        "Random" for i in range(len(axon_values) - (len(snmc_syn_values)+len(real_syn_values)))]
+
+  #  return axon_values, axon_syns, axon_hues
     fig, ax = pl.subplots(1, 1)
     cpal = sns.color_palette("Set2")
-    sns.barplot(x=axon_syns, y=axon_values, hue=axon_hues, palette=cpal, errwidth=.5)
+
+    # mean vs. median here makes a huge difference. if its median, all the mass will be placed on
+    # synapses that go to V1 because there are 3 opportunities to connect. 
+    sns.barplot(x=axon_syns, y=axon_values, hue=axon_hues, estimator=np.mean, palette=cpal, errwidth=.5, ax=ax)
+    pl.xticks(rotation=90)
     pl.show()
-    return axon_values, axon_syns, axon_hues
+
+    snmc_chord_df = pd.DataFrame(columns=["source", "target", "value"])
+    real_chord_df = pd.DataFrame(columns=["source", "target", "value"])
+    for i, synapse in enumerate(syns_of_interest):
+        snmc_row = {"source": brain_region_dictionary[synapse[0]],
+                    "target": brain_region_dictionary[synapse[1]],
+                    "value": int(snmc_syn_values_raw[i])}
+        real_row = {"source": brain_region_dictionary[synapse[0]],
+                    "target": brain_region_dictionary[synapse[1]],
+                    "value": int(np.round(real_syn_normed_to_snmc[i]))}
+        snmc_chord_df = snmc_chord_df.append(snmc_row, ignore_index=True)
+        real_chord_df = real_chord_df.append(real_row, ignore_index=True)
+        
+    snmc_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, snmc_syn_values)]
+    random_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, np.median(random_syn_values, axis=0))]
+    real_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, real_syn_values)]
+
+
+    snmc_for_heatmap = copy.deepcopy(snmc_df)
+    snmc_for_heatmap.loc[snmc_for_heatmap["PreSyn"] == "V1", "V1"] = np.nan
+    snmc_for_heatmap.loc[snmc_for_heatmap["PreSyn"] == "CP", "CP"] = np.nan
+    snmc_for_heatmap.loc[snmc_for_heatmap["PreSyn"] == "LD", "LD"] = np.nan
+    snmc_for_heatmap.loc[snmc_for_heatmap["PreSyn"] == "GPi", "GPi"] = np.nan
+    snmc_for_heatmap = snmc_for_heatmap[snmc_for_heatmap["PreSyn"] != "S1"]
+    snmc_for_heatmap = snmc_for_heatmap.reindex(sorted(snmc_for_heatmap.columns), axis=1)
+
+    real_axons.loc[real_axons["PreSyn"] == "V1", "V1"] = np.nan
+    real_for_heatmap = real_axons.reindex(sorted(real_axons.columns), axis=1)
+    
+    snmc_for_heatmap_nopresyn = snmc_for_heatmap.loc[:, snmc_for_heatmap.columns!="PreSyn"]
+    snmc_for_heatmap_nopresyn = snmc_for_heatmap_nopresyn.applymap(lambda x: x / np.sum(np.sum(snmc_for_heatmap_nopresyn)))
+
+    real_for_heatmap_nopresyn = real_for_heatmap.loc[:, real_for_heatmap.columns!="PreSyn"]
+    real_for_heatmap_nopresyn = real_for_heatmap_nopresyn.applymap(lambda x: x / np.sum(np.sum(real_for_heatmap_nopresyn)))
+
+    snmc_for_heatmap_nopresyn["PreSyn"] = snmc_for_heatmap["PreSyn"]
+    real_for_heatmap_nopresyn["PreSyn"] = real_for_heatmap["PreSyn"]
+    
+    return snmc_for_heatmap_nopresyn, real_for_heatmap_nopresyn
+    
+
+    
+
     
 
 # only thing i'm wondering here is if the LD as "obs" is a bad idea. we know "obs" comes through LGN to V1. might get kickback on that. size_obs is the only free variable other than assembly size and num assemblies. 
@@ -500,4 +627,13 @@ def make_snmc_macro_comparison(num_sims, assembly_size, num_assemblies):
 # also note that the LD to CP is not real. They are almost definitely fibers of passage leaving the thalamus via the BG. We are not normalizing just saying "injections are approximately equal in volume, and may include off target circuitry". 
                     
 # every one of these synapses is encoded in the real data. you have to get the value for each synapse and then
-# normalize to the sum. the architecture is "the relative node to node connectivity". 
+# normalize to the sum. the architecture is "the relative node to node connectivity".
+
+
+# i think it might be best to compress the presyn and then in a parenthesis write (L2) next to the V1 synapses.
+# this makes sense with the graph and the location of the inputs and outputs. try it. 
+
+
+
+# get a whole brain image of every region in the loop. put the gfp in the images and map it to a different color, then
+# superimpose them all. 
