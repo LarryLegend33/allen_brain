@@ -80,7 +80,7 @@ def calculate_connection_probabilities(layer_assignment, component_counts, num_a
                                                                    components)}
     ly = layer_assignment
     cc = component_counts
-    # Assemblies go to one input blue and one input red. Blue input goes to only one blue WTA. Red goes to all other WTA blue.
+    # Assemblies go to one input blue and one input red. Blue input goes to only one blue WTA. Red goes to all other WTA blue. This is consistent with Caroline's finding that L2 inhibitory neurons have the same tight receptive field as excitatory neurons. 
     probability_table["WTA", "WTA"] = lambda pq: (
         num_assemblies / total_layer_neurons(("WTA", "Q"), ly, cc)) * (
         (num_assemblies - 1) / total_layer_neurons(("WTA", "Q"), ly, cc)) + 1 * (
@@ -459,6 +459,10 @@ def macro_axon_calculator(num_random_sims, assembly_size, num_assemblies):
     return snmc_connections, random_assignments, random_dfs
 
 
+
+
+# this is a calculation of how many axons leave one component and go into another component.
+
 def generate_cross_component_axons(brain_assignment, brain_regions,
                                    num_assemblies, assembly_size):
     size_obs = 3
@@ -476,7 +480,7 @@ def generate_cross_component_axons(brain_assignment, brain_regions,
     axon_table["TIK", "GATE"] = lambda pq: 1 if pq[0] == pq[1] else 0
     axon_table["GATE", "Normalizer"] = lambda pq: 1
     axon_table["Normalizer", "Resampler"] = lambda pq: 1
-    axon_table["Resampler", "ObsStateSync"] = lambda pq: 1 + size_obs
+    axon_table["Resampler", "ObsStateSync"] = lambda pq: 1
     axon_table["WTA", "DependentVariable"] = lambda pq: num_assemblies
     axon_table["ObsStateSync", "DependentVariable"] = lambda pq: 1 + size_obs
     axon_table["ObsStateSync", "Assemblies"] = lambda pq: size_obs
@@ -517,7 +521,9 @@ def make_snmc_macro_comparison(num_sims, assembly_size, num_assemblies, compress
                             ("LD", "CP"), ("LD", "V1"), ("LD", "GPi"), ("LD", "S1")]
 
     syn_strings = [s[0]+"-"+s[1] for s in syns_of_interest]
-    snmc_df_verbose, random_assignments, random_dfs_verbose = macro_axon_calculator(num_sims, assembly_size, num_assemblies)
+    snmc_df_verbose, random_assignments, random_dfs_verbose = macro_axon_calculator(num_sims,
+                                                                                    assembly_size,
+                                                                                    num_assemblies)
 
     def compress_v1_postsyn(df):
         v1s = ["V1L2", "V1L4", "V1L5"]
@@ -550,6 +556,8 @@ def make_snmc_macro_comparison(num_sims, assembly_size, num_assemblies, compress
     real_syn_values /= np.sum(real_syn_values)
 #    real_syn_values *= np.sum(snmc_syn_values)
 
+    
+
     snmc_syn_values_raw = copy.deepcopy(snmc_syn_values)
     real_syn_normed_to_snmc = real_syn_values * np.sum(snmc_syn_values_raw)
 
@@ -574,45 +582,132 @@ def make_snmc_macro_comparison(num_sims, assembly_size, num_assemblies, compress
     pl.xticks(rotation=90)
     pl.show()
 
-    snmc_chord_df = pd.DataFrame(columns=["source", "target", "value"])
-    real_chord_df = pd.DataFrame(columns=["source", "target", "value"])
-    for i, synapse in enumerate(syns_of_interest):
-        snmc_row = {"source": brain_region_dictionary[synapse[0]],
-                    "target": brain_region_dictionary[synapse[1]],
-                    "value": int(snmc_syn_values_raw[i])}
-        real_row = {"source": brain_region_dictionary[synapse[0]],
-                    "target": brain_region_dictionary[synapse[1]],
-                    "value": int(np.round(real_syn_normed_to_snmc[i]))}
-        snmc_chord_df = snmc_chord_df.append(snmc_row, ignore_index=True)
-        real_chord_df = real_chord_df.append(real_row, ignore_index=True)
+    # THIS IS FOR MAKING CHORD DIAGRAMS WHICH VIKASH EVENTUALLY DIDN"T LIKE.
+    
+    # snmc_chord_df = pd.DataFrame(columns=["source", "target", "value"])
+    # real_chord_df = pd.DataFrame(columns=["source", "target", "value"])
+    # for i, synapse in enumerate(syns_of_interest):
+    #     snmc_row = {"source": brain_region_dictionary[synapse[0]],
+    #                 "target": brain_region_dictionary[synapse[1]],
+    #                 "value": int(snmc_syn_values_raw[i])}
+    #     real_row = {"source": brain_region_dictionary[synapse[0]],
+    #                 "target": brain_region_dictionary[synapse[1]],
+    #                 "value": int(np.round(real_syn_normed_to_snmc[i]))}
+    #     snmc_chord_df = snmc_chord_df.append(snmc_row, ignore_index=True)
+    #     real_chord_df = real_chord_df.append(real_row, ignore_index=True)
         
-    snmc_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, snmc_syn_values)]
-    random_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, np.median(random_syn_values, axis=0))]
-    real_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, real_syn_values)]
+    # snmc_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, snmc_syn_values)]
+    # random_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, np.median(random_syn_values, axis=0))]
+    # real_graph = [(s1, s2, val) for (s1, s2), val in zip(syns_of_interest, real_syn_values)]
+#
 
-
-    snmc_for_heatmap = copy.deepcopy(snmc_df)
-    snmc_for_heatmap.loc[snmc_for_heatmap["PreSyn"] == "V1", "V1"] = np.nan
-    snmc_for_heatmap.loc[snmc_for_heatmap["PreSyn"] == "CP", "CP"] = np.nan
-    snmc_for_heatmap.loc[snmc_for_heatmap["PreSyn"] == "LD", "LD"] = np.nan
-    snmc_for_heatmap.loc[snmc_for_heatmap["PreSyn"] == "GPi", "GPi"] = np.nan
-    snmc_for_heatmap = snmc_for_heatmap[snmc_for_heatmap["PreSyn"] != "S1"]
-    snmc_for_heatmap = snmc_for_heatmap.reindex(sorted(snmc_for_heatmap.columns), axis=1)
-
-    real_axons.loc[real_axons["PreSyn"] == "V1", "V1"] = np.nan
-    real_for_heatmap = real_axons.reindex(sorted(real_axons.columns), axis=1)
     
-    snmc_for_heatmap_nopresyn = snmc_for_heatmap.loc[:, snmc_for_heatmap.columns!="PreSyn"]
-    snmc_for_heatmap_nopresyn = snmc_for_heatmap_nopresyn.applymap(lambda x: x / np.sum(np.sum(snmc_for_heatmap_nopresyn)))
+    def prepare_for_heatmap(df):
+        df = copy.deepcopy(df)
+        if "V1" in list(df["PreSyn"]):
+            df.loc[df["PreSyn"] == "V1", "V1"] = np.nan
+        if "V1L5" in list(df["PreSyn"]):
+            df.loc[df["PreSyn"] == "V1L2", "V1"] = np.nan
+            df.loc[df["PreSyn"] == "V1L4", "V1"] = np.nan
+            df.loc[df["PreSyn"] == "V1L5", "V1"] = np.nan
+        df.loc[df["PreSyn"] == "CP", "CP"] = np.nan
+        df.loc[df["PreSyn"] == "LD", "LD"] = np.nan
+        df.loc[df["PreSyn"] == "GPi", "GPi"] = np.nan
+        df = df[df["PreSyn"] != "S1"]
+        df_nopresyn = df.loc[:, df.columns != "PreSyn"]
+        df_nopresyn = df_nopresyn.applymap(lambda x: x / np.sum(np.sum(df_nopresyn)))
+        df_nopresyn = df_nopresyn.reindex(sorted(df_nopresyn.columns), axis=1)
+        return df_nopresyn, df["PreSyn"]
 
-    real_for_heatmap_nopresyn = real_for_heatmap.loc[:, real_for_heatmap.columns!="PreSyn"]
-    real_for_heatmap_nopresyn = real_for_heatmap_nopresyn.applymap(lambda x: x / np.sum(np.sum(real_for_heatmap_nopresyn)))
+    snmc_for_heatmap, presyn_labels_snmc = prepare_for_heatmap(copy.deepcopy(snmc_df))
+    real_for_heatmap, presyn_labels_real = prepare_for_heatmap(copy.deepcopy(real_axons))
+    random_heatmaps = []
+    random_presynlabels = []
+    for r in random_dfs:
+        hm, presyn = prepare_for_heatmap(r)
+        random_heatmaps.append(hm)
+        random_presynlabels.append(presyn)
+    presyn_dict = {"snmc": presyn_labels_snmc,
+                   "real": presyn_labels_real,
+                   "random": random_presynlabels}
+    return snmc_for_heatmap, real_for_heatmap, random_heatmaps, presyn_dict
 
-    snmc_for_heatmap_nopresyn["PreSyn"] = snmc_for_heatmap["PreSyn"]
-    real_for_heatmap_nopresyn["PreSyn"] = real_for_heatmap["PreSyn"]
+
+def v1_to_bg_and_macro_heatmap(num_sims, assembly_size, num_assemblies):
+    snmc_df, real_df, random_dfs, presyn_labels = make_snmc_macro_comparison(
+        num_sims, assembly_size, num_assemblies, False)
+  
+    # V1 Layers to BG
+    snmc_w_presyn = copy.deepcopy(snmc_df)
+    snmc_w_presyn["PreSyn"] = presyn_labels["snmc"]
+    real_w_presyn = copy.deepcopy(real_df)
+    real_w_presyn["PreSyn"] = presyn_labels["real"]
+    random_dfs_w_presyn = []
+    for r, labels in zip(random_dfs, presyn_labels["random"]):
+        rdf = copy.deepcopy(r)
+        rdf["PreSyn"] = labels
+        random_dfs_w_presyn.append(rdf)
+    x_bar = np.concatenate([[1, 2, 3] for x in range(len(random_dfs) + 2)], axis=0)
+    hues_bar = np.concatenate([[1, 1, 1], [2, 2, 2]] + [[3, 3, 3] for r in random_dfs], axis=0)
+    y_bar = np.concatenate([list(r[r["PreSyn"].isin(["V1L2", "V1L4", "V1L5"])]["CP"]) for r in [snmc_w_presyn, real_w_presyn] + random_dfs_w_presyn], axis=0)
+    cpal = sns.color_palette("Set2")
+    fig, ax = pl.subplots(1, 1)
+    brplot = sns.barplot(x=x_bar, y=y_bar, hue=hues_bar, estimator=np.mean, palette=cpal, errwidth=.75, ax=ax)
+    ax.set_title("Projection to Basal Ganglia")
+    c0 = mpatches.Patch(color=cpal[0], label='SNMC')
+    c1 = mpatches.Patch(color=cpal[1], label='Real')
+    c2 = mpatches.Patch(color=cpal[2], label='Random')
+    pl.legend(handles=[c0, c1, c2])
+    brplot.set(xticklabels=["V1L2", "V1L4", "V1L5"])
+    pl.show()
+
+    snmc_comp, real_comp, random_comps, presyn_labels_comp = make_snmc_macro_comparison(
+        num_sims, assembly_size, num_assemblies, True)
+    snmc_comp_w_presyn = copy.deepcopy(snmc_comp)
+    snmc_comp_w_presyn["PreSyn"] = presyn_labels_comp["snmc"]
+    snmc_comp_w_presyn = snmc_comp_w_presyn.sort_values("PreSyn")
+    real_comp_w_presyn = copy.deepcopy(real_comp)
+    real_comp_w_presyn["PreSyn"] = presyn_labels_comp["real"]
+    real_comp_w_presyn = real_comp_w_presyn.sort_values("PreSyn")
+    random_comps_w_presyn = []
+    random_comps_no_presyn = []
+    for r, labels in zip(random_comps, presyn_labels_comp["random"]):
+        rdf = copy.deepcopy(r)
+        rdf["PreSyn"] = labels
+        rdf = rdf.sort_values("PreSyn")
+        random_comps_w_presyn.append(rdf)
+        print(rdf.loc[:, ~rdf.columns.isin(["PreSyn"])])
+        random_comps_no_presyn.append(rdf.loc[:, ~rdf.columns.isin(["PreSyn"])])
+    average_random = reduce(lambda x, y: x + y,
+                            random_comps_no_presyn) / len(random_comps_no_presyn)
+    maxval = np.max([np.max(snmc_comp), np.max(real_comp), np.max(average_random)])
+    fig, ax = pl.subplots(1, 3)
+    cmap = "BuPu"
+    sns.heatmap(snmc_comp_w_presyn.loc[:, ~snmc_comp_w_presyn.columns.isin(["PreSyn"])].applymap(float),
+                yticklabels=snmc_comp_w_presyn["PreSyn"], cmap=cmap, ax=ax[0], vmax=maxval)
+    sns.heatmap(real_comp_w_presyn.loc[:, ~real_comp_w_presyn.columns.isin(["PreSyn"])].applymap(float),
+                yticklabels=real_comp_w_presyn["PreSyn"], cmap=cmap, ax=ax[1], vmax=maxval)
+    sns.heatmap(average_random,
+                yticklabels=random_comps_w_presyn[0]["PreSyn"], cmap=cmap, ax=ax[2], vmax=maxval)
+    ax[0].set_title("SNMC")
+    ax[1].set_title("Real")
+    ax[2].set_title("Random")
+    pl.suptitle("Cross Region Connectivity")
+    pl.tight_layout()
+    pl.show()
+    return snmc_comp_w_presyn, real_comp_w_presyn, average_random
     
-    return snmc_for_heatmap_nopresyn, real_for_heatmap_nopresyn
+        
     
+
+
+    # sns.barplot(x=axon_syns, y=axon_values, hue=axon_hues, estimator=np.mean, palette=cpal, errwidth=.5, ax=ax)    
+    # # Avg Heatmap
+
+    
+    # sns.heatmap((df.loc[:, ~df.columns.isin(["PreSyn"])]).applymap(float),
+    #             yticklabels=presyn_labels, cmap=cmap, ax=ax[i], vmax=maxval)
+    # ax[i].set_title(title)
 
     
 
